@@ -660,6 +660,14 @@ body {
   display: none;
 }
 
+.weather-map-iframe {
+  width: 100%;
+  height: 380px;
+  border: none;
+  border-radius: var(--radius-sm);
+  display: block;
+}
+
 .map-loading {
   position: absolute;
   color: var(--text-dim);

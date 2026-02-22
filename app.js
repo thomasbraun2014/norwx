@@ -172,31 +172,52 @@ function meteogramUrl(yrId) {
   return urls.length > 0 ? urls[0] : '';
 }
 
-const WEATHER_MAPS = {
+const WEATHER_MAPS = isGitHubPages ? {
+  // GitHub Pages: Meteogram from yr.no + Windy embeds for interactive maps
   meteogram: {
     label: 'Meteogramm',
-    getUrl: () => meteogramUrl(getActiveLocation().yrId),
+    getUrls: () => meteogramUrls(getActiveLocation().yrId),
+    info: 'Yr.no 3-Tage Meteogramm'
+  },
+  radar: {
+    label: 'Radar',
+    windy: { overlay: 'radar', product: 'radar', zoom: 5 },
+    info: 'Niederschlagsradar'
+  },
+  wind: {
+    label: 'Wind',
+    windy: { overlay: 'wind', product: 'ecmwf', zoom: 5 },
+    info: 'Windkarte'
+  },
+  rain: {
+    label: 'Regen',
+    windy: { overlay: 'rain', product: 'ecmwf', zoom: 5 },
+    info: 'Regenvorhersage'
+  },
+  temp: {
+    label: 'Temperatur',
+    windy: { overlay: 'temp', product: 'ecmwf', zoom: 5 },
+    info: 'Temperaturkarte'
+  }
+} : {
+  // NAS/WLAN: MET Norway radar images via proxy
+  meteogram: {
+    label: 'Meteogramm',
     getUrls: () => meteogramUrls(getActiveLocation().yrId),
     info: 'Yr.no 3-Tage Meteogramm fuer den aktuellen Ort'
   },
   radar: {
     label: 'Radar',
-    getUrl: () => radarUrl('reflectivity', 'gif', 'norway'),
     getUrls: () => radarUrls('reflectivity', 'gif', 'norway'),
     info: 'Niederschlagsradar Norwegen (letzte 3h Animation)'
   },
   radar5: {
     label: 'Radar 5-Stufen',
-    getUrl: () => radarUrl('5level_reflectivity', 'gif', 'norway'),
     getUrls: () => radarUrls('5level_reflectivity', 'gif', 'norway'),
     info: 'Niederschlag in 5 Intensitaetsstufen (Animation)'
   },
   regional: {
     label: 'Regional',
-    getUrl: () => {
-      const loc = getActiveLocation();
-      return radarUrl('reflectivity', 'gif', getRadarArea(loc.lat, loc.lon));
-    },
     getUrls: () => {
       const loc = getActiveLocation();
       return radarUrls('reflectivity', 'gif', getRadarArea(loc.lat, loc.lon));
@@ -205,10 +226,6 @@ const WEATHER_MAPS = {
   },
   preciptype: {
     label: 'Niederschlagsart',
-    getUrl: () => {
-      const loc = getActiveLocation();
-      return radarUrl('preciptype', 'gif', getRadarArea(loc.lat, loc.lon));
-    },
     getUrls: () => {
       const loc = getActiveLocation();
       return radarUrls('preciptype', 'gif', getRadarArea(loc.lat, loc.lon));
@@ -694,7 +711,23 @@ function loadMap(type) {
 
   const container = document.getElementById('mapContainer');
   const info = document.getElementById('mapInfo');
-  const urls = config.getUrls();
+
+  // Windy embed (GitHub Pages)
+  if (config.windy) {
+    const loc = getActiveLocation();
+    const w = config.windy;
+    const src = `https://embed.windy.com/embed2.html?lat=${loc.lat}&lon=${loc.lon}` +
+      `&detailLat=${loc.lat}&detailLon=${loc.lon}&zoom=${w.zoom || 5}` +
+      `&level=surface&overlay=${w.overlay}&product=${w.product}` +
+      `&menu=&message=true&marker=&calendar=now&type=map&location=coordinates` +
+      `&metricWind=m%2Fs&metricTemp=%C2%B0C&radarRange=-1`;
+    container.innerHTML = `<iframe src="${src}" class="weather-map-iframe" allowfullscreen loading="lazy"></iframe>`;
+    info.textContent = config.info;
+    return;
+  }
+
+  // Image loading (NAS / direct)
+  const urls = config.getUrls ? config.getUrls() : [];
   const url = urls[0];
 
   if (!url) {
@@ -703,7 +736,6 @@ function loadMap(type) {
     return;
   }
 
-  // Build fallback chain for image loading
   const fallbacks = urls.slice(1);
 
   container.innerHTML = `<div class="map-loading" id="mapLoading">Laden...</div>
@@ -711,7 +743,6 @@ function loadMap(type) {
       onload="this.previousElementSibling.classList.add('hidden')"
       onerror="mapImageFallback(this)">`;
 
-  // Store fallback URLs on the image element
   const img = container.querySelector('.weather-map-img');
   img._fallbackUrls = fallbacks;
 
