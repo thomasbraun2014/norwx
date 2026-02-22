@@ -27,6 +27,16 @@ function getMinKp(lat) {
   return 6;
 }
 
+// Radar area mapping for preciptype (area=norway is invalid for preciptype)
+function getRadarArea(lat, lon) {
+  if (lat >= 70) return 'finnmark';
+  if (lat >= 69) return 'troms';
+  if (lat >= 65) return 'nordland';
+  if (lat >= 62) return 'central_norway';
+  if (lon >= 8) return 'southeastern_norway';
+  return 'southwestern_norway';
+}
+
 // MET Norway symbol code to description
 const SYMBOL_MAP = {
   clearsky: 'Klarer Himmel', fair: 'Heiter',
@@ -108,40 +118,35 @@ function meteogramUrl(yrId) {
 
 const WEATHER_MAPS = {
   meteogram: {
-    type: 'svg',
     label: 'Meteogramm',
     getUrl: () => meteogramUrl(getActiveLocation().yrId),
     info: 'Yr.no 3-Tage Meteogramm fuer den aktuellen Ort'
   },
   radar: {
-    type: 'image',
     label: 'Radar',
     getUrl: () => radarUrl('reflectivity', 'gif', 'norway'),
     info: 'Niederschlagsradar Norwegen (letzte 3h Animation)'
   },
   radar5: {
-    type: 'image',
     label: 'Radar 5-Stufen',
     getUrl: () => radarUrl('5level_reflectivity', 'gif', 'norway'),
     info: 'Niederschlag in 5 Intensitaetsstufen (Animation)'
   },
+  regional: {
+    label: 'Regional',
+    getUrl: () => {
+      const loc = getActiveLocation();
+      return radarUrl('reflectivity', 'gif', getRadarArea(loc.lat, loc.lon));
+    },
+    info: 'Regionaler Radar fuer den aktuellen Ort'
+  },
   preciptype: {
-    type: 'image',
     label: 'Niederschlagsart',
-    getUrl: () => radarUrl('preciptype', 'gif', 'norway'),
+    getUrl: () => {
+      const loc = getActiveLocation();
+      return radarUrl('preciptype', 'gif', getRadarArea(loc.lat, loc.lon));
+    },
     info: 'Regen/Schnee/Schneeregen Unterscheidung (Animation)'
-  },
-  nordland: {
-    type: 'image',
-    label: 'Nordland',
-    getUrl: () => radarUrl('reflectivity', 'gif', 'nordland'),
-    info: 'Radar Nordland (Lofoten, Bodoe)'
-  },
-  finnmark: {
-    type: 'image',
-    label: 'Finnmark',
-    getUrl: () => radarUrl('reflectivity', 'gif', 'finnmark'),
-    info: 'Radar Finnmark (Nordkapp, Tromsoe)'
   }
 };
 
@@ -621,18 +626,10 @@ function loadMap(type) {
     return;
   }
 
-  if (config.type === 'svg') {
-    container.innerHTML = `<div class="map-loading" id="mapLoading">Laden...</div>
-      <object type="image/svg+xml" data="${url}" class="weather-map-svg"
-        onload="this.previousElementSibling.classList.add('hidden')"
-        onerror="this.previousElementSibling.textContent='Nicht verfuegbar'">
-      </object>`;
-  } else {
-    container.innerHTML = `<div class="map-loading" id="mapLoading">Laden...</div>
-      <img class="weather-map-img" src="${url}" alt="Wetterkarte"
-        onload="this.previousElementSibling.classList.add('hidden')"
-        onerror="this.previousElementSibling.textContent='Karte nicht verfuegbar'">`;
-  }
+  container.innerHTML = `<div class="map-loading" id="mapLoading">Laden...</div>
+    <img class="weather-map-img" src="${url}" alt="${config.label}"
+      onload="this.previousElementSibling.classList.add('hidden')"
+      onerror="this.previousElementSibling.textContent='Karte nicht verfuegbar'">`;
   info.textContent = config.info;
 }
 
@@ -673,6 +670,10 @@ async function loadData() {
     // Hourly Aurora Forecast
     const hourlyAurora = computeHourlyAurora(ts, kpForecast, currentKp, loc.lat, loc.lon);
     renderHourlyAurora(hourlyAurora);
+
+    // Refresh active map (meteogram/regional depend on location)
+    const activeMapTab = document.querySelector('.map-tab.active');
+    if (activeMapTab) loadMap(activeMapTab.dataset.map);
 
     document.getElementById('updateTime').textContent =
       `Zuletzt aktualisiert: ${new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'})}`;

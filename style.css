@@ -656,14 +656,6 @@ body {
   border-radius: var(--radius-sm);
 }
 
-.weather-map-svg {
-  width: 100%;
-  height: auto;
-  min-height: 200px;
-  display: block;
-  border-radius: var(--radius-sm);
-}
-
 .weather-map-img[src=""] {
   display: none;
 }
