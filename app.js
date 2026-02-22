@@ -211,6 +211,11 @@ const WEATHER_MAPS = isGitHubPages ? {
     label: 'Temperatur',
     windy: { overlay: 'temp', product: 'ecmwf', zoom: 5 },
     info: 'Temperaturkarte'
+  },
+  clouds: {
+    label: 'Wolken',
+    windy: { overlay: 'clouds', product: 'ecmwf', zoom: 5 },
+    info: 'Wolkenabdeckung & Animation'
   }
 } : {
   // NAS/WLAN: MET Norway radar images via proxy
@@ -244,6 +249,11 @@ const WEATHER_MAPS = isGitHubPages ? {
       return radarUrls('preciptype', 'gif', getRadarArea(loc.lat, loc.lon));
     },
     info: 'Regen/Schnee/Schneeregen Unterscheidung (Animation)'
+  },
+  clouds: {
+    label: 'Wolken',
+    windy: { overlay: 'clouds', product: 'ecmwf', zoom: 5 },
+    info: 'Wolkenabdeckung & Animation'
   }
 };
 
@@ -420,6 +430,20 @@ async function fetchKpForecast() {
   return data;
 }
 
+// ===== 16-Tage Vorhersage (Open-Meteo Daily API) =====
+async function fetchDailyForecast16(lat, lon) {
+  const key = `daily16_${lat},${lon}`;
+  const cached = weatherCache[key];
+  if (cached && Date.now() - cached.time < 600000) return cached.data;
+
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max` +
+    `&timezone=auto&forecast_days=16`;
+  const data = await fetchJson(url, 12000);
+  weatherCache[key] = { data, time: Date.now() };
+  return data;
+}
+
 function getKpForTime(kpForecast, targetTime) {
   if (!kpForecast || kpForecast.length < 2) return null;
   const target = targetTime.getTime();
@@ -585,6 +609,44 @@ function renderDaily(timeseries) {
 
     return `<div class="daily-item">
       <span class="daily-day">${dayName}</span>
+      <span class="daily-icon"><img src="${getWeatherIconUrl(sym)}" alt="" onerror="this.style.display='none'"></span>
+      <span class="daily-precip">${precip}</span>
+      <div class="daily-temps">
+        <span class="daily-min">${min}\u00B0</span>
+        <div class="daily-temp-bar">
+          <div class="daily-temp-fill" style="left:${left}%;width:${Math.max(width, 5)}%"></div>
+        </div>
+        <span class="daily-max">${max}\u00B0</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderDaily16(omData) {
+  const container = document.getElementById('dailyList');
+  const dayNames = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+  const d = omData.daily;
+
+  const allMin = Math.min(...d.temperature_2m_min);
+  const allMax = Math.max(...d.temperature_2m_max);
+  const range = allMax - allMin || 1;
+
+  container.innerHTML = d.time.map((t, i) => {
+    const date = new Date(t + 'T12:00:00');
+    const min = Math.round(d.temperature_2m_min[i]);
+    const max = Math.round(d.temperature_2m_max[i]);
+    const sym = wmoToSymbol(d.weather_code[i], 12);
+    const dayName = i === 0 ? 'Heute' : dayNames[date.getDay()];
+    const dateStr = `${date.getDate()}.${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+    const left = ((d.temperature_2m_min[i] - allMin) / range * 100);
+    const width = ((d.temperature_2m_max[i] - d.temperature_2m_min[i]) / range * 100);
+    const precip = (d.precipitation_sum[i] || 0) > 0 ? `${Math.round(d.precipitation_sum[i] * 10) / 10}mm` : '';
+
+    return `<div class="daily-item">
+      <div class="daily-day-col">
+        <span class="daily-day">${dayName}</span>
+        <span class="daily-date">${dateStr}</span>
+      </div>
       <span class="daily-icon"><img src="${getWeatherIconUrl(sym)}" alt="" onerror="this.style.display='none'"></span>
       <span class="daily-precip">${precip}</span>
       <div class="daily-temps">
@@ -889,8 +951,15 @@ async function loadData() {
 
     renderCurrentWeather(ts[0]);
     renderHourly(ts);
-    renderDaily(ts);
     renderAurora(ts[0], kpArr, sunData);
+
+    // 16-Tage Vorhersage (Open-Meteo)
+    try {
+      const daily16 = await fetchDailyForecast16(loc.lat, loc.lon);
+      renderDaily16(daily16);
+    } catch {
+      renderDaily(ts);
+    }
 
     // Hourly Aurora Forecast
     const hourlyAurora = computeHourlyAurora(ts, kpForecast, currentKp, loc.lat, loc.lon);

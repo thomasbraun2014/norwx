@@ -519,10 +519,21 @@ body {
   border-bottom: none;
 }
 
+.daily-day-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 45px;
+}
+
 .daily-day {
-  width: 45px;
   font-size: 14px;
   font-weight: 600;
+}
+
+.daily-date {
+  font-size: 11px;
+  color: var(--text-dim);
+  opacity: 0.7;
 }
 
 .daily-icon img {
