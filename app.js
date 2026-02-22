@@ -97,6 +97,17 @@ function windDirection(deg) {
   return dirs[Math.round(deg / 22.5) % 16];
 }
 
+function windyMarkerCode(lat, lon) {
+  const ar = [];
+  for (let i = 98; i < 123; i++) ar.push(String.fromCharCode(i));
+  for (let i = 65; i < 91; i++) ar.push(String.fromCharCode(i));
+  for (let i = 0; i < 9; i++) ar.push(i);
+  const la = Math.round(100 * (lat + 90));
+  const lo = Math.round(100 * (lon + 180));
+  return 'm:' + ar[Math.floor(la/3600)] + ar[Math.floor((la%3600)/60)] + ar[la%60] +
+    'a' + ar[Math.floor(lo/3600)] + ar[Math.floor((lo%3600)/60)] + ar[lo%60];
+}
+
 // ===== Proxy Detection =====
 let nasReachable = null;
 
@@ -273,6 +284,9 @@ let auroraInterval = 1;
 let gpsLocation = null;
 let isGpsActive = false;
 let lastHourlyAuroraData = null;
+let forecastTimeseries = null;
+let forecastDaily16 = null;
+let activeForecastTab = '3d';
 
 function getActiveLocation() {
   if (isGpsActive && gpsLocation) return gpsLocation;
@@ -660,6 +674,173 @@ function renderDaily16(omData) {
   }).join('');
 }
 
+// ===== Forecast Tabs =====
+function render3DayForecast(timeseries) {
+  const container = document.getElementById('forecastContent');
+  if (!container) return;
+  const now = new Date();
+  const end = new Date(now.getTime() + 72 * 3600000);
+  const hours = timeseries.filter(ts => {
+    const t = new Date(ts.time);
+    return t >= now && t <= end;
+  });
+
+  const dayGroups = {};
+  const dayNames = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+  hours.forEach(ts => {
+    const t = new Date(ts.time);
+    const key = t.toISOString().slice(0, 10);
+    if (!dayGroups[key]) dayGroups[key] = { date: t, items: [] };
+    dayGroups[key].items.push(ts);
+  });
+
+  let html = '';
+  Object.values(dayGroups).forEach((group, gi) => {
+    const d = group.date;
+    const label = gi === 0 ? 'Heute' : dayNames[d.getDay()];
+    const dateStr = `${d.getDate()}.${(d.getMonth()+1).toString().padStart(2,'0')}`;
+    html += `<div class="forecast-day-block">
+      <div class="forecast-day-header">${label} ${dateStr}</div>
+      <div class="forecast-3d-scroll">`;
+    group.items.forEach((ts, i) => {
+      const t = new Date(ts.time);
+      const det = ts.data.instant.details;
+      const sym = ts.data.next_1_hours?.summary?.symbol_code || '';
+      const precip = ts.data.next_1_hours?.details?.precipitation_amount || 0;
+      const isNow = gi === 0 && i === 0;
+      html += `<div class="hourly-item${isNow ? ' now' : ''}">
+        <span class="hourly-time">${isNow ? 'Jetzt' : t.getHours().toString().padStart(2,'0')}</span>
+        <span class="hourly-icon"><img src="${getWeatherIconUrl(sym)}" alt="" onerror="this.style.display='none'"></span>
+        <span class="hourly-temp">${Math.round(det.air_temperature)}\u00B0</span>
+        ${precip > 0 ? `<span class="hourly-precip">${precip}mm</span>` : ''}
+        <span class="hourly-wind">${Math.round(det.wind_speed)}m/s</span>
+      </div>`;
+    });
+    html += `</div></div>`;
+  });
+  container.innerHTML = html;
+}
+
+function render7DayForecast(timeseries) {
+  const container = document.getElementById('forecastContent');
+  if (!container) return;
+  const dayNames = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+  const slotHours = [6, 12, 18, 0];
+  const slotLabels = ['Morgen', 'Mittag', 'Abend', 'Nacht'];
+
+  // Group timeseries by date
+  const byDate = {};
+  timeseries.forEach(ts => {
+    const t = new Date(ts.time);
+    const key = t.toISOString().slice(0, 10);
+    if (!byDate[key]) byDate[key] = {};
+    byDate[key][t.getUTCHours()] = ts;
+  });
+
+  const dates = Object.keys(byDate).sort().slice(0, 7);
+  let html = `<div class="forecast-7d-table">
+    <div class="forecast-7d-header">
+      <span class="forecast-7d-day-label"></span>
+      ${slotLabels.map(l => `<span class="forecast-7d-slot-label">${l}</span>`).join('')}
+    </div>`;
+
+  dates.forEach((dateKey, i) => {
+    const d = new Date(dateKey + 'T12:00:00');
+    const label = i === 0 ? 'Heute' : dayNames[d.getDay()];
+    const dateStr = `${d.getDate()}.${(d.getMonth()+1).toString().padStart(2,'0')}`;
+    html += `<div class="forecast-7d-row">
+      <div class="forecast-7d-day-col">
+        <span class="forecast-7d-day">${label}</span>
+        <span class="forecast-7d-date">${dateStr}</span>
+      </div>`;
+
+    slotHours.forEach(h => {
+      const ts = byDate[dateKey][h];
+      if (ts) {
+        const det = ts.data.instant.details;
+        const sym = ts.data.next_1_hours?.summary?.symbol_code || ts.data.next_6_hours?.summary?.symbol_code || '';
+        html += `<div class="forecast-7d-slot">
+          <img src="${getWeatherIconUrl(sym)}" alt="" class="forecast-7d-icon" onerror="this.style.display='none'">
+          <span class="forecast-7d-temp">${Math.round(det.air_temperature)}\u00B0</span>
+        </div>`;
+      } else {
+        html += `<div class="forecast-7d-slot"><span class="forecast-7d-temp">--</span></div>`;
+      }
+    });
+
+    html += `</div>`;
+  });
+
+  html += `</div>`;
+  container.innerHTML = html;
+}
+
+function renderForecastTab(tab) {
+  activeForecastTab = tab;
+  document.querySelectorAll('.forecast-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  if (tab === '3d' && forecastTimeseries) {
+    render3DayForecast(forecastTimeseries);
+  } else if (tab === '7d' && forecastTimeseries) {
+    render7DayForecast(forecastTimeseries);
+  } else if (tab === '16d' && forecastDaily16) {
+    const container = document.getElementById('forecastContent');
+    if (container) {
+      container.innerHTML = '<div class="daily-list" id="dailyList16"></div>';
+      renderDaily16Into(forecastDaily16, 'dailyList16');
+    }
+  }
+}
+
+function renderDaily16Into(omData, containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const dayNames = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+  const d = omData.daily;
+  const allMin = Math.min(...d.temperature_2m_min);
+  const allMax = Math.max(...d.temperature_2m_max);
+  const range = allMax - allMin || 1;
+
+  container.innerHTML = d.time.map((t, i) => {
+    const date = new Date(t + 'T12:00:00');
+    const min = Math.round(d.temperature_2m_min[i]);
+    const max = Math.round(d.temperature_2m_max[i]);
+    const sym = wmoToSymbol(d.weather_code[i], 12);
+    const dayName = i === 0 ? 'Heute' : dayNames[date.getDay()];
+    const dateStr = `${date.getDate()}.${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+    const left = ((d.temperature_2m_min[i] - allMin) / range * 100);
+    const width = ((d.temperature_2m_max[i] - d.temperature_2m_min[i]) / range * 100);
+    const precip = (d.precipitation_sum[i] || 0) > 0 ? `${Math.round(d.precipitation_sum[i] * 10) / 10}mm` : '';
+
+    return `<div class="daily-item">
+      <div class="daily-day-col">
+        <span class="daily-day">${dayName}</span>
+        <span class="daily-date">${dateStr}</span>
+      </div>
+      <span class="daily-icon"><img src="${getWeatherIconUrl(sym)}" alt="" onerror="this.style.display='none'"></span>
+      <span class="daily-precip">${precip}</span>
+      <div class="daily-temps">
+        <span class="daily-min">${min}\u00B0</span>
+        <div class="daily-temp-bar">
+          <div class="daily-temp-fill" style="left:${left}%;width:${Math.max(width, 5)}%"></div>
+        </div>
+        <span class="daily-max">${max}\u00B0</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function initForecastTabs() {
+  const tabsEl = document.getElementById('forecastTabs');
+  if (!tabsEl) return;
+  tabsEl.addEventListener('click', e => {
+    const btn = e.target.closest('.forecast-tab');
+    if (!btn) return;
+    renderForecastTab(btn.dataset.tab);
+  });
+}
+
 // ===== Aurora Rating Algorithm =====
 function computeAuroraRating(kp, cloudFrac, sunAltDeg, lat) {
   const minKp = getMinKp(lat);
@@ -870,7 +1051,7 @@ function loadMap(type) {
     const src = `https://embed.windy.com/embed2.html?lat=${loc.lat}&lon=${loc.lon}` +
       `&detailLat=${loc.lat}&detailLon=${loc.lon}&zoom=${w.zoom || 5}` +
       `&level=surface&overlay=${w.overlay}&product=${w.product}` +
-      `&menu=&message=true&marker=&calendar=now&type=map&location=coordinates` +
+      `&menu=&message=true&marker=${windyMarkerCode(loc.lat, loc.lon)}&calendar=now&type=map&location=coordinates` +
       `&metricWind=m%2Fs&metricTemp=%C2%B0C&radarRange=-1`;
     container.innerHTML = `<iframe src="${src}" class="weather-map-iframe" allowfullscreen loading="lazy"></iframe>`;
     info.textContent = config.info;
@@ -928,6 +1109,112 @@ function renderYrMapLinks() {
   ).join('');
 }
 
+// ===== Webcams =====
+const WEBCAMS = {
+  'Tromsoe': [
+    { label: 'Panorama', url: 'https://www.youtube.com/embed/3y7_fkAzzps?autoplay=1&mute=1', source: 'SkylineWebcams' }
+  ],
+  'Nordfjordeid': [
+    { label: 'Hafen', url: 'https://www.youtube.com/embed/0V59F4M3o88?autoplay=1&mute=1', source: 'SkylineWebcams' }
+  ],
+  'Narvik': [
+    { label: 'Marina', url: 'https://www.youtube.com/embed/OJneSeFqaaw?autoplay=1&mute=1', source: 'SkylineWebcams' }
+  ],
+  'Aalesund': [
+    { label: 'Hafen', link: 'https://www.skylinewebcams.com/en/webcam/norge/western-norway/alesund/alesund.html', source: 'SkylineWebcams' }
+  ],
+  'Honningsvag': [
+    { label: 'Panorama', url: 'https://www.youtube.com/embed/iXLaEkB3J0I?autoplay=1&mute=1', source: 'SkylineWebcams' }
+  ],
+  'Nordkapp': [
+    { label: 'Honningsvag', url: 'https://www.youtube.com/embed/iXLaEkB3J0I?autoplay=1&mute=1', source: 'SkylineWebcams' }
+  ],
+  'Lofoten': [
+    { label: 'Henningsvaer', link: 'https://www.skylinewebcams.com/en/webcam/norge/nordland/lofoten/henningsvaer.html', source: 'SkylineWebcams' },
+    { label: 'Reine', link: 'https://www.skylinewebcams.com/en/webcam/norge/nordland/lofoten/reine.html', source: 'SkylineWebcams' }
+  ],
+  'Bodoe': [
+    { label: 'Stadt', url: 'https://www.youtube.com/embed/ZbKYp5ulmCM?autoplay=1&mute=1', source: 'SkylineWebcams' }
+  ],
+  'Trondheim': [
+    { label: 'Hafen', url: 'https://www.youtube.com/embed/cQUw882F6aE?autoplay=1&mute=1', source: 'SkylineWebcams' }
+  ],
+  'Bergen': [
+    { label: 'Hafen', link: 'https://www.skylinewebcams.com/en/webcam/norge/western-norway/bergen/bergen.html', source: 'SkylineWebcams' }
+  ],
+  'Stavanger': [
+    { label: 'Hafen', url: 'https://www.youtube.com/embed/RA6Jm7sv_F4?autoplay=1&mute=1', source: 'SkylineWebcams' }
+  ],
+  'Oslo': [
+    { label: 'Skyline', url: 'https://www.youtube.com/embed/7VXn9NpuSZk?autoplay=1&mute=1', source: 'SkylineWebcams' }
+  ]
+};
+
+let activeWebcamIdx = -1;
+
+function renderWebcams() {
+  const container = document.getElementById('webcamContent');
+  if (!container) return;
+  const loc = getActiveLocation();
+  const locName = loc.nearestName || loc.name;
+  const cams = WEBCAMS[locName] || [];
+
+  if (cams.length === 0) {
+    container.innerHTML = '<div class="webcam-empty">Keine Webcams fuer diesen Ort</div>';
+    return;
+  }
+
+  activeWebcamIdx = -1;
+  let html = '<div class="webcam-buttons">';
+  cams.forEach((cam, i) => {
+    if (cam.url) {
+      html += `<button class="webcam-btn" data-idx="${i}">\uD83D\uDCF7 ${cam.label} <span class="webcam-source">${cam.source}</span></button>`;
+    } else if (cam.link) {
+      html += `<a class="webcam-btn webcam-link" href="${cam.link}" target="_blank">\uD83D\uDCF7 ${cam.label} <span class="webcam-source">${cam.source} \u2197</span></a>`;
+    }
+  });
+  html += '</div><div class="webcam-viewer" id="webcamViewer"></div>';
+  container.innerHTML = html;
+}
+
+function toggleWebcam(idx) {
+  const loc = getActiveLocation();
+  const locName = loc.nearestName || loc.name;
+  const cams = WEBCAMS[locName] || [];
+  const viewer = document.getElementById('webcamViewer');
+  if (!viewer || !cams[idx]) return;
+
+  const btns = document.querySelectorAll('.webcam-btn[data-idx]');
+  if (activeWebcamIdx === idx) {
+    viewer.innerHTML = '';
+    activeWebcamIdx = -1;
+    btns.forEach(b => b.classList.remove('active'));
+    return;
+  }
+
+  activeWebcamIdx = idx;
+  btns.forEach(b => b.classList.toggle('active', parseInt(b.dataset.idx) === idx));
+  const cam = cams[idx];
+  viewer.innerHTML = `<div class="webcam-iframe-wrap">
+    <div class="webcam-loading">Laden...</div>
+    <iframe src="${cam.url}" class="webcam-iframe" allowfullscreen allow="autoplay" loading="lazy"
+      onload="this.previousElementSibling.classList.add('hidden')"></iframe>
+    <button class="webcam-close-btn" id="webcamCloseBtn">\u2715</button>
+  </div>`;
+}
+
+// Event delegation for webcam buttons
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.webcam-btn[data-idx]');
+  if (btn) {
+    toggleWebcam(parseInt(btn.dataset.idx));
+    return;
+  }
+  if (e.target.id === 'webcamCloseBtn' || e.target.closest('#webcamCloseBtn')) {
+    toggleWebcam(activeWebcamIdx);
+  }
+});
+
 // ===== Main Load =====
 async function loadData() {
   const loc = getActiveLocation();
@@ -953,13 +1240,17 @@ async function loadData() {
     renderHourly(ts);
     renderAurora(ts[0], kpArr, sunData);
 
-    // 16-Tage Vorhersage (Open-Meteo)
+    // Forecast-Tabs: Daten in State speichern
+    forecastTimeseries = ts;
     try {
-      const daily16 = await fetchDailyForecast16(loc.lat, loc.lon);
-      renderDaily16(daily16);
+      forecastDaily16 = await fetchDailyForecast16(loc.lat, loc.lon);
     } catch {
-      renderDaily(ts);
+      forecastDaily16 = null;
     }
+    renderForecastTab(activeForecastTab);
+
+    // Webcams aktualisieren
+    renderWebcams();
 
     // Hourly Aurora Forecast
     const hourlyAurora = computeHourlyAurora(ts, kpForecast, currentKp, loc.lat, loc.lon);
@@ -1004,6 +1295,7 @@ async function loadData() {
 async function init() {
   renderLocationTabs();
   renderYrMapLinks();
+  initForecastTabs();
 
   await checkNasProxy();
 
