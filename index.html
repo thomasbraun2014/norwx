@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="NorWX">
+  <meta name="theme-color" content="#0a0e1a">
+  <meta name="description" content="Norwegian Weather & Aurora Forecast">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="style.css">
+  <title>NorWX</title>
+</head>
+<body>
+  <header class="app-header">
+    <h1 class="app-title">Nor<span class="accent">WX</span></h1>
+    <button class="refresh-btn" id="refreshBtn" aria-label="Refresh">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M23 4v6h-6M1 20v-6h6"/>
+        <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+      </svg>
+    </button>
+  </header>
+
+  <nav class="location-tabs" id="locationTabs">
+    <!-- Filled by JS -->
+  </nav>
+
+  <main class="content" id="mainContent">
+    <!-- Current Weather -->
+    <section class="card current-weather" id="currentWeather">
+      <div class="current-main">
+        <div class="current-temp" id="currentTemp">--°</div>
+        <div class="current-icon" id="currentIcon"></div>
+      </div>
+      <div class="current-desc" id="currentDesc">Laden...</div>
+      <div class="current-details-row">
+        <span id="currentFeelsLike">Fuehlt sich an: --°</span>
+        <span id="currentWind">Wind: -- m/s</span>
+      </div>
+    </section>
+
+    <!-- Aurora Card -->
+    <section class="card aurora-card" id="auroraCard">
+      <h2 class="card-title aurora-title">Nordlicht-Vorhersage</h2>
+
+      <div class="aurora-rating" id="auroraRating">
+        <div class="aurora-stars" id="auroraStars"></div>
+        <div class="aurora-label" id="auroraLabel">Berechne...</div>
+      </div>
+      <div class="aurora-summary" id="auroraSummary"></div>
+
+      <div class="aurora-factors">
+        <!-- KP Index -->
+        <div class="aurora-factor">
+          <div class="factor-header">
+            <span class="factor-name">KP-Index</span>
+            <span class="factor-value" id="kpValue">--</span>
+          </div>
+          <div class="kp-meter" id="kpMeter">
+            <div class="kp-segment" data-level="1"></div>
+            <div class="kp-segment" data-level="2"></div>
+            <div class="kp-segment" data-level="3"></div>
+            <div class="kp-segment" data-level="4"></div>
+            <div class="kp-segment" data-level="5"></div>
+            <div class="kp-segment" data-level="6"></div>
+            <div class="kp-segment" data-level="7"></div>
+            <div class="kp-segment" data-level="8"></div>
+            <div class="kp-segment" data-level="9"></div>
+          </div>
+          <div class="factor-info" id="kpInfo"></div>
+        </div>
+
+        <!-- Cloud Cover -->
+        <div class="aurora-factor">
+          <div class="factor-header">
+            <span class="factor-name">Bewoelkung</span>
+            <span class="factor-value" id="cloudValue">--%</span>
+          </div>
+          <div class="cloud-bar">
+            <div class="cloud-fill" id="cloudFill"></div>
+          </div>
+          <div class="factor-info" id="cloudInfo">Wolken blockieren die Sicht auf Nordlichter. Unter 30% ist ideal.</div>
+        </div>
+
+        <!-- Darkness -->
+        <div class="aurora-factor">
+          <div class="factor-header">
+            <span class="factor-name">Dunkelheit</span>
+            <span class="factor-value" id="darknessValue">--</span>
+          </div>
+          <div class="darkness-indicator" id="darknessIndicator"></div>
+          <div class="factor-info" id="darknessInfo"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Hourly Forecast -->
+    <section class="card" id="hourlySection">
+      <h2 class="card-title">Naechste 24 Stunden</h2>
+      <div class="hourly-scroll" id="hourlyScroll">
+        <!-- Filled by JS -->
+      </div>
+    </section>
+
+    <!-- Daily Forecast -->
+    <section class="card" id="dailySection">
+      <h2 class="card-title">7-Tage Vorhersage</h2>
+      <div class="daily-list" id="dailyList">
+        <!-- Filled by JS -->
+      </div>
+    </section>
+
+    <!-- Detail Cards -->
+    <section class="detail-grid">
+      <div class="card detail-card">
+        <div class="detail-label">Wind</div>
+        <div class="detail-value" id="detailWind">-- m/s</div>
+        <div class="detail-sub" id="detailWindDir">--</div>
+      </div>
+      <div class="card detail-card">
+        <div class="detail-label">Luftfeuchte</div>
+        <div class="detail-value" id="detailHumidity">--%</div>
+      </div>
+      <div class="card detail-card">
+        <div class="detail-label">Luftdruck</div>
+        <div class="detail-value" id="detailPressure">-- hPa</div>
+      </div>
+      <div class="card detail-card">
+        <div class="detail-label">UV-Index</div>
+        <div class="detail-value" id="detailUV">--</div>
+      </div>
+    </section>
+
+    <!-- Weather Maps -->
+    <section class="card" id="weatherMaps">
+      <h2 class="card-title">Wetterkarten &amp; Radar</h2>
+      <div class="map-tabs" id="mapTabs">
+        <!-- Filled by JS from WEATHER_MAPS config -->
+      </div>
+      <div class="map-container" id="mapContainer">
+        <div class="map-loading" id="mapLoading">Laden...</div>
+      </div>
+      <div class="map-info" id="mapInfo"></div>
+      <div class="yr-links-section">
+        <h3 class="yr-links-title">Interaktive Yr.no Karten</h3>
+        <div class="yr-map-links" id="yrMapLinks">
+          <!-- Filled by JS -->
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>Daten: <a href="https://www.yr.no" target="_blank">MET Norway / Yr</a> &amp; <a href="https://www.swpc.noaa.gov" target="_blank">NOAA SWPC</a></p>
+      <p class="update-time" id="updateTime">Zuletzt aktualisiert: --</p>
+    </footer>
+  </main>
+
+  <script src="suncalc.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

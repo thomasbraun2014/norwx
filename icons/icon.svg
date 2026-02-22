@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="80" fill="#0a0e1a"/>
+  <defs>
+    <linearGradient id="ag" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#00e676"/>
+      <stop offset="100%" stop-color="#7c4dff"/>
+    </linearGradient>
+  </defs>
+  <!-- Aurora arc -->
+  <path d="M80 320 Q160 120 256 160 Q352 200 432 100" stroke="url(#ag)" stroke-width="16" fill="none" stroke-linecap="round" opacity="0.8"/>
+  <path d="M100 350 Q180 170 270 200 Q360 230 440 140" stroke="url(#ag)" stroke-width="10" fill="none" stroke-linecap="round" opacity="0.5"/>
+  <path d="M120 370 Q200 220 280 240 Q360 260 430 180" stroke="url(#ag)" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.3"/>
+  <!-- NW text -->
+  <text x="256" y="420" font-family="system-ui,-apple-system,sans-serif" font-size="120" font-weight="700" fill="white" text-anchor="middle">NW</text>
+</svg>
