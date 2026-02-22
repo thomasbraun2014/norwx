@@ -1,7 +1,7 @@
 {
-  "name": "BT-Wetter - Norwegian Weather",
+  "name": "BT-Wetter - Norwegisches Wetter",
   "short_name": "BT-Wetter",
-  "description": "Norwegian Weather & Aurora Forecast",
+  "description": "Norwegisches Wetter & Nordlicht-Vorhersage",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#0a0e1a",

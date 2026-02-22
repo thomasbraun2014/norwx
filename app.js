@@ -1,4 +1,4 @@
-// ===== BT-Wetter - Norwegian Weather PWA =====
+// ===== BT-Wetter - Norwegische Wetter-PWA =====
 
 const NAS_PROXY = 'http://192.168.0.135:3001';
 const isGitHubPages = location.hostname.endsWith('.github.io');
@@ -917,7 +917,7 @@ async function loadData() {
     console.error('Load error:', err);
     const desc = document.getElementById('currentDesc');
     if (isGitHubPages) {
-      desc.innerHTML = 'Daten werden geladen...<br><small>Wetterdaten werden alle 15 Min. aktualisiert.</small>';
+      desc.innerHTML = 'Daten werden geladen...<br><small>Wetterdaten werden alle 5 Min. aktualisiert.</small>';
     } else {
       const isNetErr = err.message.includes('Failed to fetch') || err.name === 'AbortError' || err.message.includes('NetworkError');
       if (isNetErr && !nasReachable) {
