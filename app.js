@@ -1,7 +1,13 @@
-// ===== NorWX - Norwegian Weather PWA =====
+// ===== BT-Wetter - Norwegian Weather PWA =====
+
+const NAS_PROXY = 'http://192.168.0.135:3001';
 
 const LOCATIONS = [
   { name: 'Tromsoe', lat: 69.6496, lon: 18.9560, yrId: '1-305409' },
+  { name: 'Nordfjordeid', lat: 61.7890, lon: 5.9870, yrId: '1-168106' },
+  { name: 'Narvik', lat: 68.4385, lon: 17.4272, yrId: '1-283156' },
+  { name: 'Aalesund', lat: 62.4722, lon: 6.1495, yrId: '1-181828' },
+  { name: 'Honningsvag', lat: 70.9813, lon: 25.9706, yrId: '1-328454' },
   { name: 'Nordkapp', lat: 71.1685, lon: 25.7838, yrId: '1-328454' },
   { name: 'Lofoten', lat: 68.2094, lon: 14.5630, yrId: '1-276917' },
   { name: 'Bodoe', lat: 67.2804, lon: 14.4049, yrId: '1-269359' },
@@ -68,28 +74,46 @@ function windDirection(deg) {
   return dirs[Math.round(deg / 22.5) % 16];
 }
 
-// Weather map configurations
-// Uses proxy when on local network, direct URLs when on the road
-function useProxy() {
-  const h = window.location.hostname;
-  return h === 'localhost' || h === '127.0.0.1' || h.startsWith('192.168.');
+// ===== Proxy Detection =====
+// NAS proxy available when on home network, otherwise direct API
+let nasReachable = null;
+
+async function checkNasProxy() {
+  if (nasReachable !== null) return nasReachable;
+  try {
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 3000);
+    const r = await fetch(NAS_PROXY + '/api/kp-index', { signal: ctrl.signal });
+    nasReachable = r.ok;
+  } catch {
+    nasReachable = false;
+  }
+  console.log('NAS proxy reachable:', nasReachable);
+  return nasReachable;
 }
 
+// ===== Weather Map URLs =====
 function radarUrl(type, format, area) {
-  if (useProxy()) {
-    return `${window.location.origin}/api/radar?type=${type}&format=${format}&area=${area}&t=${Date.now()}`;
+  if (nasReachable) {
+    return `${NAS_PROXY}/api/radar?type=${type}&format=${format}&area=${area}&t=${Date.now()}`;
   }
   return `https://api.met.no/weatherapi/radar/2.0/${type}.${format}?area=${area}`;
 }
 
 function meteogramUrl(yrId) {
-  if (useProxy()) {
-    return `${window.location.origin}/api/meteogram?id=${yrId}&t=${Date.now()}`;
+  if (nasReachable) {
+    return `${NAS_PROXY}/api/meteogram?id=${yrId}&t=${Date.now()}`;
   }
   return `https://www.yr.no/en/content/${yrId}/meteogram.svg?mode=dark`;
 }
 
 const WEATHER_MAPS = {
+  meteogram: {
+    type: 'svg',
+    label: 'Meteogramm',
+    getUrl: () => meteogramUrl(LOCATIONS[currentLocationIdx].yrId),
+    info: 'Yr.no 3-Tage Meteogramm fuer den aktuellen Ort'
+  },
   radar: {
     type: 'image',
     label: 'Radar',
@@ -107,12 +131,6 @@ const WEATHER_MAPS = {
     label: 'Niederschlagsart',
     getUrl: () => radarUrl('preciptype', 'gif', 'norway'),
     info: 'Regen/Schnee/Schneeregen Unterscheidung (Animation)'
-  },
-  meteogram: {
-    type: 'svg',
-    label: 'Meteogramm',
-    getUrl: () => meteogramUrl(LOCATIONS[currentLocationIdx].yrId),
-    info: 'Yr.no 3-Tage Meteogramm fuer den aktuellen Ort'
   },
   nordland: {
     type: 'image',
@@ -142,31 +160,18 @@ let weatherCache = {};
 let kpData = null;
 
 // ===== API Functions =====
-// Try direct API first, fall back to local proxy if CORS/DNS fails
-function getBaseUrl() {
-  // If served from NAS/localhost, use proxy; otherwise direct
-  const host = window.location.hostname;
-  if (host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.')) {
-    return window.location.origin;
-  }
-  return null; // no proxy available
-}
-
-async function fetchWithFallback(directUrl, proxyPath) {
-  // Try direct API first
+async function fetchJson(url, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs || 10000);
   try {
-    const resp = await fetch(directUrl, { signal: AbortSignal.timeout(8000) });
-    if (resp.ok) return await resp.json();
+    const resp = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return await resp.json();
   } catch (e) {
-    console.log('Direct API failed, trying proxy:', e.message);
+    clearTimeout(timer);
+    throw e;
   }
-  // Fallback to local proxy
-  const base = getBaseUrl();
-  if (base) {
-    const resp = await fetch(base + proxyPath);
-    if (resp.ok) return await resp.json();
-  }
-  throw new Error('Beide API-Zugriffe fehlgeschlagen');
 }
 
 async function fetchWeather(lat, lon) {
@@ -174,9 +179,26 @@ async function fetchWeather(lat, lon) {
   const cached = weatherCache[key];
   if (cached && Date.now() - cached.time < 600000) return cached.data;
 
+  // Try NAS proxy first (if reachable), then direct
   const directUrl = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lon}`;
-  const proxyPath = `/api/weather?lat=${lat}&lon=${lon}`;
-  const data = await fetchWithFallback(directUrl, proxyPath);
+  const proxyUrl = `${NAS_PROXY}/api/weather?lat=${lat}&lon=${lon}`;
+
+  let data;
+  if (nasReachable) {
+    try {
+      data = await fetchJson(proxyUrl, 12000);
+    } catch {
+      data = await fetchJson(directUrl, 12000);
+    }
+  } else {
+    try {
+      data = await fetchJson(directUrl, 12000);
+    } catch {
+      // Last resort: try NAS anyway
+      data = await fetchJson(proxyUrl, 12000);
+    }
+  }
+
   weatherCache[key] = { data, time: Date.now() };
   return data;
 }
@@ -185,8 +207,23 @@ async function fetchKpIndex() {
   if (kpData && Date.now() - kpData.time < 300000) return kpData.data;
 
   const directUrl = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json';
-  const proxyPath = '/api/kp-index';
-  const data = await fetchWithFallback(directUrl, proxyPath);
+  const proxyUrl = `${NAS_PROXY}/api/kp-index`;
+
+  let data;
+  if (nasReachable) {
+    try {
+      data = await fetchJson(proxyUrl, 10000);
+    } catch {
+      data = await fetchJson(directUrl, 10000);
+    }
+  } else {
+    try {
+      data = await fetchJson(directUrl, 10000);
+    } catch {
+      data = await fetchJson(proxyUrl, 10000);
+    }
+  }
+
   kpData = { data, time: Date.now() };
   return data;
 }
@@ -221,10 +258,10 @@ function renderCurrentWeather(ts) {
   const sym = ts.data.next_1_hours?.summary?.symbol_code ||
               ts.data.next_6_hours?.summary?.symbol_code || '';
 
-  document.getElementById('currentTemp').textContent = `${Math.round(d.air_temperature)}°`;
+  document.getElementById('currentTemp').textContent = `${Math.round(d.air_temperature)}\u00B0`;
   document.getElementById('currentDesc').textContent = getSymbolDescription(sym);
   document.getElementById('currentFeelsLike').textContent =
-    `Fuehlt sich an: ${Math.round(d.air_temperature - (d.wind_speed * 0.7))}°`;
+    `Fuehlt sich an: ${Math.round(d.air_temperature - (d.wind_speed * 0.7))}\u00B0`;
   document.getElementById('currentWind').textContent = `Wind: ${d.wind_speed} m/s`;
 
   const iconEl = document.getElementById('currentIcon');
@@ -261,7 +298,7 @@ function renderHourly(timeseries) {
     return `<div class="hourly-item${isNow ? ' now' : ''}">
       <span class="hourly-time">${isNow ? 'Jetzt' : t.getHours().toString().padStart(2, '0')}</span>
       <span class="hourly-icon"><img src="${getWeatherIconUrl(sym)}" alt="" onerror="this.style.display='none'"></span>
-      <span class="hourly-temp">${Math.round(d.air_temperature)}°</span>
+      <span class="hourly-temp">${Math.round(d.air_temperature)}\u00B0</span>
       ${precip > 0 ? `<span class="hourly-precip">${precip}mm</span>` : ''}
     </div>`;
   }).join('');
@@ -303,11 +340,11 @@ function renderDaily(timeseries) {
       <span class="daily-icon"><img src="${getWeatherIconUrl(sym)}" alt="" onerror="this.style.display='none'"></span>
       <span class="daily-precip">${precip}</span>
       <div class="daily-temps">
-        <span class="daily-min">${min}°</span>
+        <span class="daily-min">${min}\u00B0</span>
         <div class="daily-temp-bar">
           <div class="daily-temp-fill" style="left:${left}%;width:${Math.max(width, 5)}%"></div>
         </div>
-        <span class="daily-max">${max}°</span>
+        <span class="daily-max">${max}\u00B0</span>
       </div>
     </div>`;
   }).join('');
@@ -317,17 +354,13 @@ function renderAurora(weather, kpArr, sunData) {
   const loc = LOCATIONS[currentLocationIdx];
   const minKp = getMinKp(loc.lat);
 
-  // KP value - last entry
   let kpVal = 0;
   if (kpArr && kpArr.length > 1) {
     const last = kpArr[kpArr.length - 1];
     kpVal = parseFloat(last[1]) || 0;
   }
 
-  // Cloud cover
   const cloudFrac = weather.data.instant.details.cloud_area_fraction || 0;
-
-  // Darkness
   const sunAlt = sunData.sunPos.altitude * (180 / Math.PI);
   let darknessLevel, darknessText, darknessEmoji;
   if (sunAlt < -18) {
@@ -340,39 +373,31 @@ function renderAurora(weather, kpArr, sunData) {
     darknessLevel = 'day'; darknessText = 'Tageslicht'; darknessEmoji = '\u2600\uFE0F';
   }
 
-  // Moon phase
   const moonPhase = sunData.moonIllum.fraction;
   const moonEmoji = moonPhase < 0.1 ? '\uD83C\uDF11' : moonPhase < 0.4 ? '\uD83C\uDF12' :
                     moonPhase < 0.6 ? '\uD83C\uDF13' : moonPhase < 0.9 ? '\uD83C\uDF14' : '\uD83C\uDF15';
 
-  // Sunrise/Sunset times
   const fmt = d => {
     if (!d || isNaN(d.getTime())) return '--:--';
     return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
   };
 
-  // Aurora Rating (0-5)
   let rating = 0;
   if (kpVal >= minKp) rating += 2;
   else if (kpVal >= minKp - 1) rating += 1;
-
   if (darknessLevel === 'night') rating += 2;
   else if (darknessLevel === 'nautical') rating += 1.5;
   else if (darknessLevel === 'civil') rating += 0.5;
-
   if (cloudFrac < 25) rating += 1;
   else if (cloudFrac < 50) rating += 0.5;
-
   rating = Math.min(5, Math.round(rating));
 
   const ratingLabels = [
     'Keine Chance', 'Sehr unwahrscheinlich', 'Unwahrscheinlich',
     'Moeglich', 'Gute Chancen', 'Ausgezeichnet'
   ];
-
   const ratingColors = ['#666', '#ff5252', '#ff5252', '#ffab40', '#00e676', '#7c4dff'];
 
-  // Build summary
   let summary = [];
   if (darknessLevel === 'day') summary.push('Es ist zu hell fuer Nordlichter');
   else {
@@ -383,7 +408,6 @@ function renderAurora(weather, kpArr, sunData) {
     if (moonPhase > 0.7) summary.push('heller Mond reduziert Kontrast');
   }
 
-  // Render
   document.getElementById('auroraStars').innerHTML =
     Array.from({length: 5}, (_, i) =>
       `<span style="color:${i < rating ? ratingColors[rating] : '#333'}">${i < rating ? '\u2605' : '\u2606'}</span>`
@@ -393,7 +417,6 @@ function renderAurora(weather, kpArr, sunData) {
   document.getElementById('auroraLabel').style.color = ratingColors[rating];
   document.getElementById('auroraSummary').textContent = summary.join(' \u2022 ');
 
-  // KP
   document.getElementById('kpValue').textContent = kpVal.toFixed(1);
   document.getElementById('kpValue').style.color = kpVal >= minKp ? 'var(--accent-green)' : 'var(--danger)';
   document.querySelectorAll('.kp-segment').forEach(seg => {
@@ -403,7 +426,6 @@ function renderAurora(weather, kpArr, sunData) {
   document.getElementById('kpInfo').textContent =
     `Misst die Sonnenwind-Aktivitaet. Hoehere Werte = staerkere Nordlichter. Ab KP ${minKp} hier in ${loc.name} sichtbar.`;
 
-  // Cloud
   document.getElementById('cloudValue').textContent = `${Math.round(cloudFrac)}%`;
   document.getElementById('cloudValue').style.color = cloudFrac < 30 ? 'var(--accent-green)' :
     cloudFrac < 60 ? 'var(--warning)' : 'var(--danger)';
@@ -411,7 +433,6 @@ function renderAurora(weather, kpArr, sunData) {
   document.getElementById('cloudFill').style.background = cloudFrac < 30 ? 'var(--accent-green)' :
     cloudFrac < 60 ? 'var(--warning)' : 'var(--danger)';
 
-  // Darkness
   document.getElementById('darknessValue').textContent = darknessText;
   document.getElementById('darknessValue').style.color =
     darknessLevel === 'night' ? 'var(--accent-green)' :
@@ -425,7 +446,7 @@ function renderAurora(weather, kpArr, sunData) {
     `Mond: ${Math.round(moonPhase * 100)}% beleuchtet`;
 }
 
-// Weather Maps
+// ===== Weather Maps =====
 function initMapTabs() {
   renderMapTabs();
   const tabs = document.getElementById('mapTabs');
@@ -436,7 +457,7 @@ function initMapTabs() {
     btn.classList.add('active');
     loadMap(btn.dataset.map);
   });
-  loadMap('radar');
+  loadMap('meteogram');
 }
 
 function renderMapTabs() {
@@ -455,14 +476,12 @@ function loadMap(type) {
   const url = config.getUrl();
 
   if (config.type === 'svg') {
-    // SVG Meteogram - use object tag for better rendering
     container.innerHTML = `<div class="map-loading" id="mapLoading">Laden...</div>
       <object type="image/svg+xml" data="${url}" class="weather-map-svg"
         onload="this.previousElementSibling.classList.add('hidden')"
         onerror="this.previousElementSibling.textContent='Nicht verfuegbar'">
       </object>`;
   } else {
-    // Regular image (PNG/GIF)
     container.innerHTML = `<div class="map-loading" id="mapLoading">Laden...</div>
       <img class="weather-map-img" src="${url}" alt="Wetterkarte"
         onload="this.previousElementSibling.classList.add('hidden')"
@@ -504,30 +523,31 @@ async function loadData() {
 
   } catch (err) {
     console.error('Load error:', err);
-    document.getElementById('currentDesc').textContent = 'Fehler beim Laden. Bitte erneut versuchen.';
+    document.getElementById('currentDesc').textContent = 'Fehler beim Laden: ' + err.message;
   }
 
   btn.classList.remove('spinning');
 }
 
 // ===== Init =====
-function init() {
+async function init() {
   renderLocationTabs();
-  initMapTabs();
   renderYrMapLinks();
+
+  // Check if NAS proxy is reachable (parallel with first data load)
+  await checkNasProxy();
+
+  initMapTabs();
   loadData();
 
-  // Refresh button
   document.getElementById('refreshBtn').addEventListener('click', () => {
     weatherCache = {};
     kpData = null;
     loadData();
   });
 
-  // Auto-refresh every 10 min
   setInterval(loadData, 600000);
 
-  // Register Service Worker
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW reg failed:', e));
   }

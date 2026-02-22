@@ -1,6 +1,6 @@
 {
-  "name": "NorWX - Norwegian Weather",
-  "short_name": "NorWX",
+  "name": "BT-Wetter - Norwegian Weather",
+  "short_name": "BT-Wetter",
   "description": "Norwegian Weather & Aurora Forecast",
   "start_url": "./",
   "display": "standalone",

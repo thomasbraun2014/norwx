@@ -1,4 +1,4 @@
-const CACHE_NAME = 'norwx-v2';
+const CACHE_NAME = 'btwetter-v3';
 // Use relative paths resolved against SW scope
 const SW_SCOPE = self.registration.scope;
 const STATIC_ASSETS = [
