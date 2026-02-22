@@ -1,6 +1,7 @@
 // ===== BT-Wetter - Norwegian Weather PWA =====
 
 const NAS_PROXY = 'http://192.168.0.135:3001';
+const isGitHubPages = location.hostname.endsWith('.github.io');
 
 const LOCATIONS = [
   { name: 'Tromsoe', lat: 69.6496, lon: 18.9560, yrId: '1-305409' },
@@ -256,13 +257,26 @@ async function fetchWeather(lat, lon) {
   const cached = weatherCache[key];
   if (cached && Date.now() - cached.time < 600000) return cached.data;
 
-  const directUrl = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lon}`;
-  const proxyUrl = `/api/weather?lat=${lat}&lon=${lon}`;
-  const nasUrl = `${NAS_PROXY}/api/weather?lat=${lat}&lon=${lon}`;
+  let urls;
+  if (isGitHubPages) {
+    // GitHub Pages: api.met.no has no CORS support
+    // Use pre-cached static data from GitHub Actions (updated every 15 min)
+    const loc = LOCATIONS.find(l => l.lat === lat && l.lon === lon);
+    if (loc) {
+      const slug = loc.name.toLowerCase();
+      urls = [`./data/weather-${slug}.json`];
+    } else {
+      // GPS location - no cached data, try direct (will fail due to CORS)
+      urls = [`https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lon}`];
+    }
+  } else {
+    const directUrl = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lon}`;
+    const proxyUrl = `/api/weather?lat=${lat}&lon=${lon}`;
+    const nasUrl = `${NAS_PROXY}/api/weather?lat=${lat}&lon=${lon}`;
+    urls = buildUrlList(nasUrl, proxyUrl, directUrl);
+  }
 
-  const urls = buildUrlList(nasUrl, proxyUrl, directUrl);
   const data = await tryFetch(urls, 12000);
-
   weatherCache[key] = { data, time: Date.now() };
   return data;
 }
@@ -271,12 +285,18 @@ async function fetchKpIndex() {
   if (kpData && Date.now() - kpData.time < 300000) return kpData.data;
 
   const directUrl = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json';
-  const proxyUrl = '/api/kp-index';
-  const nasUrl = `${NAS_PROXY}/api/kp-index`;
 
-  const urls = buildUrlList(nasUrl, proxyUrl, directUrl);
+  let urls;
+  if (isGitHubPages) {
+    // NOAA has CORS - fetch directly, static cache as fallback
+    urls = [directUrl, './data/kp.json'];
+  } else {
+    const proxyUrl = '/api/kp-index';
+    const nasUrl = `${NAS_PROXY}/api/kp-index`;
+    urls = buildUrlList(nasUrl, proxyUrl, directUrl);
+  }
+
   const data = await tryFetch(urls, 10000);
-
   kpData = { data, time: Date.now() };
   return data;
 }
@@ -285,12 +305,17 @@ async function fetchKpForecast() {
   if (kpForecastCache && Date.now() - kpForecastCache.time < 300000) return kpForecastCache.data;
 
   const directUrl = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json';
-  const proxyUrl = '/api/kp-forecast';
-  const nasUrl = `${NAS_PROXY}/api/kp-forecast`;
 
-  const urls = buildUrlList(nasUrl, proxyUrl, directUrl);
+  let urls;
+  if (isGitHubPages) {
+    urls = [directUrl, './data/kp-forecast.json'];
+  } else {
+    const proxyUrl = '/api/kp-forecast';
+    const nasUrl = `${NAS_PROXY}/api/kp-forecast`;
+    urls = buildUrlList(nasUrl, proxyUrl, directUrl);
+  }
+
   const data = await tryFetch(urls, 10000);
-
   kpForecastCache = { data, time: Date.now() };
   return data;
 }
@@ -746,17 +771,33 @@ async function loadData() {
     const activeMapTab = document.querySelector('.map-tab.active');
     if (activeMapTab) loadMap(activeMapTab.dataset.map);
 
-    document.getElementById('updateTime').textContent =
-      `Zuletzt aktualisiert: ${new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'})}`;
+    // Show update time - fetch static data timestamp on GitHub Pages
+    let timeStr = new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+    if (isGitHubPages) {
+      try {
+        const meta = await fetchJson('./data/updated.json', 5000);
+        if (meta && meta.updated) {
+          const d = new Date(meta.updated);
+          timeStr = d.toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'}) + ' (Cache)';
+        }
+      } catch {}
+    }
+    document.getElementById('updateTime').textContent = `Zuletzt aktualisiert: ${timeStr}`;
 
   } catch (err) {
     console.error('Load error:', err);
     const desc = document.getElementById('currentDesc');
-    const isNetErr = err.message.includes('Failed to fetch') || err.name === 'AbortError' || err.message.includes('NetworkError');
-    if (isNetErr && !nasReachable) {
-      desc.innerHTML = 'API nicht erreichbar.<br><small style="color:var(--accent-blue)">Zuhause: http://192.168.0.135:3001 nutzen</small>';
+    if (isGitHubPages && isGpsActive) {
+      desc.innerHTML = 'GPS-Standort nicht verfuegbar.<br><small>Waehle einen der festen Orte oben.</small>';
+    } else if (isGitHubPages) {
+      desc.innerHTML = 'Daten werden geladen...<br><small>Wetterdaten werden alle 15 Min. aktualisiert.</small>';
     } else {
-      desc.textContent = 'Fehler: ' + err.message;
+      const isNetErr = err.message.includes('Failed to fetch') || err.name === 'AbortError' || err.message.includes('NetworkError');
+      if (isNetErr && !nasReachable) {
+        desc.innerHTML = 'API nicht erreichbar.<br><small style="color:var(--accent-blue)">Zuhause: http://192.168.0.135:3001 nutzen</small>';
+      } else {
+        desc.textContent = 'Fehler: ' + err.message;
+      }
     }
   }
 

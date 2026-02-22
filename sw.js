@@ -1,10 +1,10 @@
-const CACHE_NAME = 'btwetter-v7';
+const CACHE_NAME = 'btwetter-v8';
 const STATIC_ASSETS = [
   './',
   './index.html',
-  './style.css?v=6',
-  './app.js?v=6',
-  './suncalc.js?v=6',
+  './style.css?v=7',
+  './app.js?v=7',
+  './suncalc.js?v=7',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -37,6 +37,23 @@ self.addEventListener('fetch', event => {
   if (url.hostname === '192.168.0.135') {
     event.respondWith(
       fetch(event.request).catch(() => new Response('NAS unreachable', { status: 503 }))
+    );
+    return;
+  }
+
+  // Same-origin data/*.json (GitHub Actions cache): network-first, short cache
+  if (url.origin === self.location.origin && url.pathname.includes('/data/')) {
+    event.respondWith(
+      fetch(event.request)
+        .then(resp => {
+          if (resp.ok) {
+            const clone = resp.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone))
+              .catch(err => console.warn('SW cache put failed:', err));
+          }
+          return resp;
+        })
+        .catch(() => caches.match(event.request))
     );
     return;
   }
