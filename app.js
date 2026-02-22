@@ -269,6 +269,72 @@ function getActiveLocation() {
   return LOCATIONS[currentLocationIdx];
 }
 
+// ===== Open-Meteo (CORS-friendly, for GPS on GitHub Pages) =====
+function wmoToSymbol(code, hour) {
+  const sfx = (hour >= 6 && hour < 21) ? '_day' : '_night';
+  const map = {
+    0: 'clearsky' + sfx, 1: 'fair' + sfx, 2: 'partlycloudy' + sfx, 3: 'cloudy',
+    45: 'fog', 48: 'fog',
+    51: 'lightrain', 53: 'rain', 55: 'heavyrain',
+    56: 'lightsleet', 57: 'sleet',
+    61: 'lightrain', 63: 'rain', 65: 'heavyrain',
+    66: 'lightsleet', 67: 'sleet',
+    71: 'lightsnow', 73: 'snow', 75: 'heavysnow', 77: 'lightsnow',
+    80: 'lightrainshowers' + sfx, 81: 'rainshowers' + sfx, 82: 'heavyrainshowers' + sfx,
+    85: 'lightsnowshowers' + sfx, 86: 'snowshowers' + sfx,
+    95: 'rainandthunder', 96: 'rainandthunder', 99: 'rainandthunder'
+  };
+  return map[code] || 'cloudy';
+}
+
+function convertOpenMeteoToMetNo(om) {
+  const h = om.hourly;
+  const timeseries = [];
+  for (let i = 0; i < h.time.length; i++) {
+    const t = h.time[i];
+    const hour = new Date(t).getUTCHours();
+    // Sum next 6 hours precipitation
+    let precip6 = 0;
+    for (let j = i; j < Math.min(i + 6, h.time.length); j++) {
+      precip6 += (h.precipitation[j] || 0);
+    }
+    timeseries.push({
+      time: t.endsWith('Z') ? t : t + ':00Z',
+      data: {
+        instant: {
+          details: {
+            air_temperature: h.temperature_2m[i],
+            wind_speed: h.wind_speed_10m[i],
+            wind_from_direction: h.wind_direction_10m ? h.wind_direction_10m[i] : 0,
+            relative_humidity: h.relative_humidity_2m ? h.relative_humidity_2m[i] : 50,
+            air_pressure_at_sea_level: h.surface_pressure ? h.surface_pressure[i] : 1013,
+            cloud_area_fraction: h.cloud_cover[i],
+            ultraviolet_index_clear_sky: h.uv_index ? h.uv_index[i] : 0
+          }
+        },
+        next_1_hours: {
+          summary: { symbol_code: wmoToSymbol(h.weather_code[i], hour) },
+          details: { precipitation_amount: h.precipitation[i] || 0 }
+        },
+        next_6_hours: {
+          summary: { symbol_code: wmoToSymbol(h.weather_code[i], hour) },
+          details: { precipitation_amount: Math.round(precip6 * 10) / 10 }
+        }
+      }
+    });
+  }
+  return { properties: { timeseries } };
+}
+
+async function fetchWeatherOpenMeteo(lat, lon) {
+  const params = 'current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code,cloud_cover,surface_pressure' +
+    '&hourly=temperature_2m,relative_humidity_2m,weather_code,precipitation,cloud_cover,wind_speed_10m,wind_direction_10m,surface_pressure' +
+    '&timezone=UTC&forecast_days=7';
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&${params}`;
+  const data = await fetchJson(url, 12000);
+  return convertOpenMeteoToMetNo(data);
+}
+
 // ===== API Functions =====
 async function fetchJson(url, timeoutMs) {
   const ctrl = new AbortController();
@@ -292,14 +358,17 @@ async function fetchWeather(lat, lon) {
   let urls;
   if (isGitHubPages) {
     // GitHub Pages: api.met.no has no CORS support
-    // Use pre-cached static data from GitHub Actions (updated every 15 min)
-    let loc = LOCATIONS.find(l => l.lat === lat && l.lon === lon);
-    if (!loc) {
-      // GPS: use nearest cached location's weather data
-      loc = findNearestLocation(lat, lon);
+    const loc = LOCATIONS.find(l => l.lat === lat && l.lon === lon);
+    if (loc) {
+      // Fixed location: use pre-cached static data
+      const slug = loc.name.toLowerCase();
+      urls = [`./data/weather-${slug}.json`];
+    } else {
+      // GPS: use Open-Meteo API (has CORS, works directly from browser)
+      const data = await fetchWeatherOpenMeteo(lat, lon);
+      weatherCache[key] = { data, time: Date.now() };
+      return data;
     }
-    const slug = loc.name.toLowerCase();
-    urls = [`./data/weather-${slug}.json`];
   } else {
     const directUrl = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lon}`;
     const proxyUrl = `/api/weather?lat=${lat}&lon=${lon}`;
@@ -439,11 +508,7 @@ function renderCurrentWeather(ts) {
               ts.data.next_6_hours?.summary?.symbol_code || '';
 
   document.getElementById('currentTemp').textContent = `${Math.round(d.air_temperature)}\u00B0`;
-  let desc = getSymbolDescription(sym);
-  if (isGpsActive && gpsLocation && gpsLocation.nearestName && isGitHubPages) {
-    desc += ` (Daten: ${gpsLocation.nearestName})`;
-  }
-  document.getElementById('currentDesc').textContent = desc;
+  document.getElementById('currentDesc').textContent = getSymbolDescription(sym);
   document.getElementById('currentFeelsLike').textContent =
     `Fuehlt sich an: ${Math.round(d.air_temperature - (d.wind_speed * 0.7))}\u00B0`;
   document.getElementById('currentWind').textContent = `Wind: ${d.wind_speed} m/s`;
