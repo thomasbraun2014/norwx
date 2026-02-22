@@ -725,9 +725,16 @@ function mapImageFallback(img) {
     console.warn('Map image failed, trying fallback:', nextUrl);
     img.src = nextUrl;
   } else {
-    // All URLs exhausted
+    // All URLs exhausted - show yr.no link as alternative
     const loading = img.previousElementSibling;
-    if (loading) loading.textContent = 'Karte nicht verfuegbar';
+    if (loading) {
+      loading.innerHTML = 'Karte nicht verfuegbar<br>' +
+        '<a href="https://www.yr.no/en/map/radar" target="_blank" ' +
+        'style="color:var(--accent-blue);font-size:13px;text-decoration:underline">' +
+        'Yr.no Radar oeffnen</a>';
+      loading.classList.remove('hidden');
+    }
+    img.style.display = 'none';
   }
 }
 
