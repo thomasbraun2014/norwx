@@ -28,6 +28,19 @@ function getMinKp(lat) {
   return 6;
 }
 
+// Find nearest cached location (for GPS on GitHub Pages)
+function findNearestLocation(lat, lon) {
+  let nearest = LOCATIONS[0];
+  let minDist = Infinity;
+  for (const loc of LOCATIONS) {
+    const dlat = loc.lat - lat;
+    const dlon = (loc.lon - lon) * Math.cos(lat * Math.PI / 180);
+    const dist = dlat * dlat + dlon * dlon;
+    if (dist < minDist) { minDist = dist; nearest = loc; }
+  }
+  return nearest;
+}
+
 // Radar area mapping for preciptype (area=norway is invalid for preciptype)
 function getRadarArea(lat, lon) {
   if (lat >= 70) return 'finnmark';
@@ -280,14 +293,13 @@ async function fetchWeather(lat, lon) {
   if (isGitHubPages) {
     // GitHub Pages: api.met.no has no CORS support
     // Use pre-cached static data from GitHub Actions (updated every 15 min)
-    const loc = LOCATIONS.find(l => l.lat === lat && l.lon === lon);
-    if (loc) {
-      const slug = loc.name.toLowerCase();
-      urls = [`./data/weather-${slug}.json`];
-    } else {
-      // GPS location - no cached data, try direct (will fail due to CORS)
-      urls = [`https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lon}`];
+    let loc = LOCATIONS.find(l => l.lat === lat && l.lon === lon);
+    if (!loc) {
+      // GPS: use nearest cached location's weather data
+      loc = findNearestLocation(lat, lon);
     }
+    const slug = loc.name.toLowerCase();
+    urls = [`./data/weather-${slug}.json`];
   } else {
     const directUrl = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lon}`;
     const proxyUrl = `/api/weather?lat=${lat}&lon=${lon}`;
@@ -369,11 +381,15 @@ async function requestGpsLocation() {
     }
     navigator.geolocation.getCurrentPosition(
       pos => {
+        const lat = Math.round(pos.coords.latitude * 10000) / 10000;
+        const lon = Math.round(pos.coords.longitude * 10000) / 10000;
+        const nearest = findNearestLocation(lat, lon);
         gpsLocation = {
           name: 'Standort',
-          lat: Math.round(pos.coords.latitude * 10000) / 10000,
-          lon: Math.round(pos.coords.longitude * 10000) / 10000,
-          yrId: null
+          lat,
+          lon,
+          yrId: nearest.yrId,
+          nearestName: nearest.name
         };
         resolve(gpsLocation);
       },
@@ -386,7 +402,11 @@ async function requestGpsLocation() {
 // ===== Render Functions =====
 function renderLocationTabs() {
   const tabs = document.getElementById('locationTabs');
-  const gpsTab = `<button class="loc-tab gps-tab${isGpsActive ? ' active' : ''}" data-gps="1">\uD83D\uDCCD Standort</button>`;
+  let gpsLabel = '\uD83D\uDCCD Standort';
+  if (isGpsActive && gpsLocation) {
+    gpsLabel = `\uD83D\uDCCD ${gpsLocation.lat.toFixed(2)}, ${gpsLocation.lon.toFixed(2)}`;
+  }
+  const gpsTab = `<button class="loc-tab gps-tab${isGpsActive ? ' active' : ''}" data-gps="1">${gpsLabel}</button>`;
   const locTabs = LOCATIONS.map((loc, i) =>
     `<button class="loc-tab${!isGpsActive && i === currentLocationIdx ? ' active' : ''}" data-idx="${i}">${loc.name}</button>`
   ).join('');
@@ -419,7 +439,11 @@ function renderCurrentWeather(ts) {
               ts.data.next_6_hours?.summary?.symbol_code || '';
 
   document.getElementById('currentTemp').textContent = `${Math.round(d.air_temperature)}\u00B0`;
-  document.getElementById('currentDesc').textContent = getSymbolDescription(sym);
+  let desc = getSymbolDescription(sym);
+  if (isGpsActive && gpsLocation && gpsLocation.nearestName && isGitHubPages) {
+    desc += ` (Daten: ${gpsLocation.nearestName})`;
+  }
+  document.getElementById('currentDesc').textContent = desc;
   document.getElementById('currentFeelsLike').textContent =
     `Fuehlt sich an: ${Math.round(d.air_temperature - (d.wind_speed * 0.7))}\u00B0`;
   document.getElementById('currentWind').textContent = `Wind: ${d.wind_speed} m/s`;
@@ -827,9 +851,7 @@ async function loadData() {
   } catch (err) {
     console.error('Load error:', err);
     const desc = document.getElementById('currentDesc');
-    if (isGitHubPages && isGpsActive) {
-      desc.innerHTML = 'GPS-Standort nicht verfuegbar.<br><small>Waehle einen der festen Orte oben.</small>';
-    } else if (isGitHubPages) {
+    if (isGitHubPages) {
       desc.innerHTML = 'Daten werden geladen...<br><small>Wetterdaten werden alle 15 Min. aktualisiert.</small>';
     } else {
       const isNetErr = err.message.includes('Failed to fetch') || err.name === 'AbortError' || err.message.includes('NetworkError');
