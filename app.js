@@ -142,21 +142,23 @@ function buildUrlList(nasUrl, proxyUrl, directUrl) {
 
 // Build image URL list with same-origin proxy as preferred, fallbacks included
 function radarUrls(type, format, area) {
+  const directUrl = `https://api.met.no/weatherapi/radar/2.0/${type}.${format}?area=${area}`;
+  // GitHub Pages: use direct URL only (<img> tags don't need CORS)
+  if (isGitHubPages) return [directUrl];
   const proxyUrl = `/api/radar?type=${type}&format=${format}&area=${area}&t=${Date.now()}`;
   const nasUrl = `${NAS_PROXY}/api/radar?type=${type}&format=${format}&area=${area}&t=${Date.now()}`;
-  const directUrl = `https://api.met.no/weatherapi/radar/2.0/${type}.${format}?area=${area}`;
   if (nasReachable) return [nasUrl, proxyUrl, directUrl];
-  if (location.protocol === 'https:') return [proxyUrl, directUrl];
   return [proxyUrl, directUrl, nasUrl];
 }
 
 function meteogramUrls(yrId) {
   if (!yrId) return [];
+  const directUrl = `https://www.yr.no/en/content/${yrId}/meteogram.svg?mode=dark`;
+  // GitHub Pages: use direct URL only (<img> tags don't need CORS)
+  if (isGitHubPages) return [directUrl];
   const proxyUrl = `/api/meteogram?id=${yrId}&t=${Date.now()}`;
   const nasUrl = `${NAS_PROXY}/api/meteogram?id=${yrId}&t=${Date.now()}`;
-  const directUrl = `https://www.yr.no/en/content/${yrId}/meteogram.svg?mode=dark`;
   if (nasReachable) return [nasUrl, proxyUrl, directUrl];
-  if (location.protocol === 'https:') return [proxyUrl, directUrl];
   return [proxyUrl, directUrl, nasUrl];
 }
 
