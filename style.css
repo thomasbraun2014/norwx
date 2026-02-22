@@ -228,6 +228,132 @@ body {
   line-height: 1.4;
 }
 
+/* GPS Tab */
+.gps-tab {
+  background: rgba(0,176,255,0.1) !important;
+  border-color: var(--accent-blue) !important;
+}
+
+.gps-tab.active {
+  background: linear-gradient(135deg, rgba(0,176,255,0.2), rgba(0,230,118,0.2)) !important;
+  border-color: var(--accent-blue) !important;
+}
+
+/* Hourly Aurora Forecast */
+.aurora-hourly {
+  margin: 16px 0;
+  padding: 12px 0;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.aurora-hourly-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.aurora-hourly-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.aurora-interval-btns {
+  display: flex;
+  gap: 4px;
+}
+
+.interval-btn {
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--card-border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.interval-btn.active {
+  background: rgba(124,77,255,0.2);
+  border-color: var(--accent-purple);
+  color: var(--accent-purple);
+}
+
+.aurora-hourly-scroll {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  margin: 0 -16px;
+  padding: 0 16px;
+}
+
+.aurora-hourly-scroll::-webkit-scrollbar { display: none; }
+
+.aurora-hour {
+  flex-shrink: 0;
+  width: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  scroll-snap-align: start;
+  border-radius: var(--radius-sm);
+  transition: opacity 0.2s;
+}
+
+.aurora-hour.now {
+  background: rgba(0,230,118,0.08);
+  border: 1px solid rgba(0,230,118,0.2);
+}
+
+.aurora-hour.daylight {
+  opacity: 0.4;
+}
+
+.aurora-hour-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.aurora-hour-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.aurora-hour-label {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.aurora-hour-clouds {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.aurora-hour-kp {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.aurora-hour-day {
+  font-size: 10px;
+}
+
 .aurora-factors {
   display: flex;
   flex-direction: column;

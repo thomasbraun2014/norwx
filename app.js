@@ -68,14 +68,12 @@ function getWeatherIconUrl(code) {
   return `https://raw.githubusercontent.com/metno/weathericons/main/weather/svg/${code}.svg`;
 }
 
-// Wind direction from degrees
 function windDirection(deg) {
   const dirs = ['N','NNO','NO','ONO','O','OSO','SO','SSO','S','SSW','SW','WSW','W','WNW','NW','NNW'];
   return dirs[Math.round(deg / 22.5) % 16];
 }
 
 // ===== Proxy Detection =====
-// NAS proxy available when on home network, otherwise direct API
 let nasReachable = null;
 
 async function checkNasProxy() {
@@ -101,6 +99,7 @@ function radarUrl(type, format, area) {
 }
 
 function meteogramUrl(yrId) {
+  if (!yrId) return '';
   if (nasReachable) {
     return `${NAS_PROXY}/api/meteogram?id=${yrId}&t=${Date.now()}`;
   }
@@ -111,7 +110,7 @@ const WEATHER_MAPS = {
   meteogram: {
     type: 'svg',
     label: 'Meteogramm',
-    getUrl: () => meteogramUrl(LOCATIONS[currentLocationIdx].yrId),
+    getUrl: () => meteogramUrl(getActiveLocation().yrId),
     info: 'Yr.no 3-Tage Meteogramm fuer den aktuellen Ort'
   },
   radar: {
@@ -146,7 +145,6 @@ const WEATHER_MAPS = {
   }
 };
 
-// Links to interactive yr.no maps (open in Safari)
 const YR_MAP_LINKS = [
   { label: 'Niederschlag', url: 'https://www.yr.no/en/map/radar' },
   { label: 'Wetter', url: 'https://www.yr.no/en/map/weather' },
@@ -158,6 +156,16 @@ const YR_MAP_LINKS = [
 let currentLocationIdx = 0;
 let weatherCache = {};
 let kpData = null;
+let kpForecastCache = null;
+let auroraInterval = 1;
+let gpsLocation = null;
+let isGpsActive = false;
+let lastHourlyAuroraData = null;
+
+function getActiveLocation() {
+  if (isGpsActive && gpsLocation) return gpsLocation;
+  return LOCATIONS[currentLocationIdx];
+}
 
 // ===== API Functions =====
 async function fetchJson(url, timeoutMs) {
@@ -179,24 +187,16 @@ async function fetchWeather(lat, lon) {
   const cached = weatherCache[key];
   if (cached && Date.now() - cached.time < 600000) return cached.data;
 
-  // Try NAS proxy first (if reachable), then direct
   const directUrl = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lon}`;
   const proxyUrl = `${NAS_PROXY}/api/weather?lat=${lat}&lon=${lon}`;
 
   let data;
   if (nasReachable) {
-    try {
-      data = await fetchJson(proxyUrl, 12000);
-    } catch {
-      data = await fetchJson(directUrl, 12000);
-    }
+    try { data = await fetchJson(proxyUrl, 12000); }
+    catch { data = await fetchJson(directUrl, 12000); }
   } else {
-    try {
-      data = await fetchJson(directUrl, 12000);
-    } catch {
-      // Last resort: try NAS anyway
-      data = await fetchJson(proxyUrl, 12000);
-    }
+    try { data = await fetchJson(directUrl, 12000); }
+    catch { data = await fetchJson(proxyUrl, 12000); }
   }
 
   weatherCache[key] = { data, time: Date.now() };
@@ -211,21 +211,47 @@ async function fetchKpIndex() {
 
   let data;
   if (nasReachable) {
-    try {
-      data = await fetchJson(proxyUrl, 10000);
-    } catch {
-      data = await fetchJson(directUrl, 10000);
-    }
+    try { data = await fetchJson(proxyUrl, 10000); }
+    catch { data = await fetchJson(directUrl, 10000); }
   } else {
-    try {
-      data = await fetchJson(directUrl, 10000);
-    } catch {
-      data = await fetchJson(proxyUrl, 10000);
-    }
+    try { data = await fetchJson(directUrl, 10000); }
+    catch { data = await fetchJson(proxyUrl, 10000); }
   }
 
   kpData = { data, time: Date.now() };
   return data;
+}
+
+async function fetchKpForecast() {
+  if (kpForecastCache && Date.now() - kpForecastCache.time < 300000) return kpForecastCache.data;
+
+  const directUrl = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json';
+  const proxyUrl = `${NAS_PROXY}/api/kp-forecast`;
+
+  let data;
+  if (nasReachable) {
+    try { data = await fetchJson(proxyUrl, 10000); }
+    catch { data = await fetchJson(directUrl, 10000); }
+  } else {
+    try { data = await fetchJson(directUrl, 10000); }
+    catch { data = await fetchJson(proxyUrl, 10000); }
+  }
+
+  kpForecastCache = { data, time: Date.now() };
+  return data;
+}
+
+function getKpForTime(kpForecast, targetTime) {
+  if (!kpForecast || kpForecast.length < 2) return null;
+  const target = targetTime.getTime();
+  let closest = null;
+  let closestDiff = Infinity;
+  for (let i = 1; i < kpForecast.length; i++) {
+    const t = new Date(kpForecast[i][0]).getTime();
+    const diff = Math.abs(t - target);
+    if (diff < closestDiff) { closestDiff = diff; closest = kpForecast[i]; }
+  }
+  return closest ? parseFloat(closest[1]) || 0 : null;
 }
 
 function getSunData(lat, lon) {
@@ -236,18 +262,54 @@ function getSunData(lat, lon) {
   return { times, sunPos, moonIllum, now };
 }
 
+// ===== GPS Location =====
+async function requestGpsLocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('GPS nicht verfuegbar'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        gpsLocation = {
+          name: 'Standort',
+          lat: Math.round(pos.coords.latitude * 10000) / 10000,
+          lon: Math.round(pos.coords.longitude * 10000) / 10000,
+          yrId: null
+        };
+        resolve(gpsLocation);
+      },
+      err => reject(err),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  });
+}
+
 // ===== Render Functions =====
 function renderLocationTabs() {
   const tabs = document.getElementById('locationTabs');
-  tabs.innerHTML = LOCATIONS.map((loc, i) =>
-    `<button class="loc-tab${i === currentLocationIdx ? ' active' : ''}" data-idx="${i}">${loc.name}</button>`
+  const gpsTab = `<button class="loc-tab gps-tab${isGpsActive ? ' active' : ''}" data-gps="1">\uD83D\uDCCD Standort</button>`;
+  const locTabs = LOCATIONS.map((loc, i) =>
+    `<button class="loc-tab${!isGpsActive && i === currentLocationIdx ? ' active' : ''}" data-idx="${i}">${loc.name}</button>`
   ).join('');
+  tabs.innerHTML = gpsTab + locTabs;
 
-  tabs.querySelectorAll('.loc-tab').forEach(btn => {
+  tabs.querySelector('.gps-tab').addEventListener('click', async () => {
+    try {
+      if (!gpsLocation) await requestGpsLocation();
+      isGpsActive = true;
+      renderLocationTabs();
+      loadData();
+    } catch (e) {
+      alert('GPS Fehler: ' + e.message);
+    }
+  });
+
+  tabs.querySelectorAll('.loc-tab:not(.gps-tab)').forEach(btn => {
     btn.addEventListener('click', () => {
+      isGpsActive = false;
       currentLocationIdx = parseInt(btn.dataset.idx);
-      document.querySelectorAll('.loc-tab').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
+      renderLocationTabs();
       loadData();
     });
   });
@@ -270,7 +332,6 @@ function renderCurrentWeather(ts) {
     iconEl.innerHTML = `<img src="${iconUrl}" alt="${sym}" onerror="this.style.display='none'">`;
   }
 
-  // Detail cards
   document.getElementById('detailWind').textContent = `${d.wind_speed} m/s`;
   document.getElementById('detailWindDir').textContent = windDirection(d.wind_from_direction);
   document.getElementById('detailHumidity').textContent = `${Math.round(d.relative_humidity)}%`;
@@ -350,8 +411,22 @@ function renderDaily(timeseries) {
   }).join('');
 }
 
+// ===== Aurora Rating Algorithm =====
+function computeAuroraRating(kp, cloudFrac, sunAltDeg, lat) {
+  const minKp = getMinKp(lat);
+  let rating = 0;
+  if (kp >= minKp) rating += 2;
+  else if (kp >= minKp - 1) rating += 1;
+  if (sunAltDeg < -18) rating += 2;
+  else if (sunAltDeg < -12) rating += 1.5;
+  else if (sunAltDeg < -6) rating += 0.5;
+  if (cloudFrac < 25) rating += 1;
+  else if (cloudFrac < 50) rating += 0.5;
+  return Math.min(5, Math.round(rating));
+}
+
 function renderAurora(weather, kpArr, sunData) {
-  const loc = LOCATIONS[currentLocationIdx];
+  const loc = getActiveLocation();
   const minKp = getMinKp(loc.lat);
 
   let kpVal = 0;
@@ -382,15 +457,7 @@ function renderAurora(weather, kpArr, sunData) {
     return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
   };
 
-  let rating = 0;
-  if (kpVal >= minKp) rating += 2;
-  else if (kpVal >= minKp - 1) rating += 1;
-  if (darknessLevel === 'night') rating += 2;
-  else if (darknessLevel === 'nautical') rating += 1.5;
-  else if (darknessLevel === 'civil') rating += 0.5;
-  if (cloudFrac < 25) rating += 1;
-  else if (cloudFrac < 50) rating += 0.5;
-  rating = Math.min(5, Math.round(rating));
+  const rating = computeAuroraRating(kpVal, cloudFrac, sunAlt, loc.lat);
 
   const ratingLabels = [
     'Keine Chance', 'Sehr unwahrscheinlich', 'Unwahrscheinlich',
@@ -424,7 +491,7 @@ function renderAurora(weather, kpArr, sunData) {
     seg.classList.toggle('active', level <= Math.ceil(kpVal));
   });
   document.getElementById('kpInfo').textContent =
-    `Misst die Sonnenwind-Aktivitaet. Hoehere Werte = staerkere Nordlichter. Ab KP ${minKp} hier in ${loc.name} sichtbar.`;
+    `Misst die Sonnenwind-Aktivitaet. Ab KP ${minKp} hier in ${loc.name} sichtbar.`;
 
   document.getElementById('cloudValue').textContent = `${Math.round(cloudFrac)}%`;
   document.getElementById('cloudValue').style.color = cloudFrac < 30 ? 'var(--accent-green)' :
@@ -444,6 +511,79 @@ function renderAurora(weather, kpArr, sunData) {
     `Nordlichter brauchen Dunkelheit. Beste Zeit: 21-02 Uhr.<br>` +
     `\u2600\uFE0F Auf: ${fmt(sunData.times.sunrise)} | Unter: ${fmt(sunData.times.sunset)} | ` +
     `Mond: ${Math.round(moonPhase * 100)}% beleuchtet`;
+}
+
+// ===== Hourly Aurora Forecast =====
+function computeHourlyAurora(timeseries, kpForecast, currentKp, lat, lon) {
+  const now = new Date();
+  const result = [];
+  const interval = auroraInterval;
+
+  const future = timeseries.filter(ts => {
+    const t = new Date(ts.time);
+    return t >= now && t <= new Date(now.getTime() + 86400000);
+  });
+
+  for (let i = 0; i < future.length; i++) {
+    const ts = future[i];
+    const t = new Date(ts.time);
+
+    if (i > 0) {
+      const hoursSinceFirst = Math.round((t - new Date(future[0].time)) / 3600000);
+      if (hoursSinceFirst % interval !== 0) continue;
+    }
+
+    const clouds = ts.data.instant.details.cloud_area_fraction || 0;
+
+    let kp = currentKp;
+    if (kpForecast) {
+      const fKp = getKpForTime(kpForecast, t);
+      if (fKp !== null) kp = fKp;
+    }
+
+    const sunPos = SunCalc.getPosition(t, lat, lon);
+    const sunAlt = sunPos.altitude * (180 / Math.PI);
+    const rating = computeAuroraRating(kp, clouds, sunAlt, lat);
+
+    result.push({
+      time: t,
+      rating,
+      kp: Math.round(kp * 10) / 10,
+      clouds: Math.round(clouds),
+      sunAlt,
+      isDark: sunAlt < -6,
+      isNow: i === 0
+    });
+  }
+
+  return result;
+}
+
+function renderHourlyAurora(hourlyData) {
+  const container = document.getElementById('auroraHourlyScroll');
+  if (!container) return;
+
+  lastHourlyAuroraData = hourlyData;
+
+  const ratingColors = ['#555', '#ff5252', '#ff5252', '#ffab40', '#00e676', '#7c4dff'];
+  const ratingLabels = ['--', 'Gering', 'Gering', 'Mittel', 'Gut', 'Top'];
+
+  container.innerHTML = hourlyData.map(h => {
+    const hour = h.isNow ? 'Jetzt' : h.time.getHours().toString().padStart(2, '0') + ':00';
+    const color = ratingColors[h.rating];
+    const dimClass = h.isDark ? '' : ' daylight';
+
+    return `<div class="aurora-hour${h.isNow ? ' now' : ''}${dimClass}">
+      <span class="aurora-hour-time">${hour}</span>
+      <div class="aurora-hour-circle" style="background:${color}22;border:2px solid ${color}">
+        <span style="color:${color};font-weight:700;font-size:16px">${h.rating}</span>
+      </div>
+      <span class="aurora-hour-label" style="color:${color}">${ratingLabels[h.rating]}</span>
+      <span class="aurora-hour-clouds">\u2601 ${h.clouds}%</span>
+      <span class="aurora-hour-kp">KP ${h.kp}</span>
+      ${!h.isDark ? '<span class="aurora-hour-day">\u2600\uFE0F</span>' : ''}
+    </div>`;
+  }).join('');
 }
 
 // ===== Weather Maps =====
@@ -475,6 +615,12 @@ function loadMap(type) {
   const info = document.getElementById('mapInfo');
   const url = config.getUrl();
 
+  if (!url) {
+    container.innerHTML = '<div class="map-loading">Nicht verfuegbar fuer GPS-Standort</div>';
+    info.textContent = '';
+    return;
+  }
+
   if (config.type === 'svg') {
     container.innerHTML = `<div class="map-loading" id="mapLoading">Laden...</div>
       <object type="image/svg+xml" data="${url}" class="weather-map-svg"
@@ -500,23 +646,33 @@ function renderYrMapLinks() {
 
 // ===== Main Load =====
 async function loadData() {
-  const loc = LOCATIONS[currentLocationIdx];
+  const loc = getActiveLocation();
   const btn = document.getElementById('refreshBtn');
   btn.classList.add('spinning');
 
   try {
-    const [weatherData, kpArr] = await Promise.all([
+    const [weatherData, kpArr, kpForecast] = await Promise.all([
       fetchWeather(loc.lat, loc.lon),
-      fetchKpIndex().catch(() => null)
+      fetchKpIndex().catch(() => null),
+      fetchKpForecast().catch(() => null)
     ]);
 
     const ts = weatherData.properties.timeseries;
     const sunData = getSunData(loc.lat, loc.lon);
 
+    let currentKp = 0;
+    if (kpArr && kpArr.length > 1) {
+      currentKp = parseFloat(kpArr[kpArr.length - 1][1]) || 0;
+    }
+
     renderCurrentWeather(ts[0]);
     renderHourly(ts);
     renderDaily(ts);
     renderAurora(ts[0], kpArr, sunData);
+
+    // Hourly Aurora Forecast
+    const hourlyAurora = computeHourlyAurora(ts, kpForecast, currentKp, loc.lat, loc.lon);
+    renderHourlyAurora(hourlyAurora);
 
     document.getElementById('updateTime').textContent =
       `Zuletzt aktualisiert: ${new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'})}`;
@@ -534,7 +690,6 @@ async function init() {
   renderLocationTabs();
   renderYrMapLinks();
 
-  // Check if NAS proxy is reachable (parallel with first data load)
   await checkNasProxy();
 
   initMapTabs();
@@ -543,8 +698,26 @@ async function init() {
   document.getElementById('refreshBtn').addEventListener('click', () => {
     weatherCache = {};
     kpData = null;
+    kpForecastCache = null;
     loadData();
   });
+
+  // Aurora interval buttons
+  const intervalBtns = document.getElementById('auroraIntervalBtns');
+  if (intervalBtns) {
+    intervalBtns.addEventListener('click', e => {
+      const btn = e.target.closest('.interval-btn');
+      if (!btn) return;
+      intervalBtns.querySelectorAll('.interval-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      auroraInterval = parseInt(btn.dataset.interval);
+      // Re-render without re-fetching
+      if (lastHourlyAuroraData) {
+        // Need to recompute with new interval - trigger full reload
+        loadData();
+      }
+    });
+  }
 
   setInterval(loadData, 600000);
 
