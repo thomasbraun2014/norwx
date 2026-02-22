@@ -1,12 +1,10 @@
-const CACHE_NAME = 'btwetter-v4';
-// Use relative paths resolved against SW scope
-const SW_SCOPE = self.registration.scope;
+const CACHE_NAME = 'btwetter-v5';
 const STATIC_ASSETS = [
   './',
   './index.html',
-  './style.css',
-  './app.js',
-  './suncalc.js',
+  './style.css?v=4',
+  './app.js?v=4',
+  './suncalc.js?v=4',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -22,7 +20,7 @@ self.addEventListener('install', event => {
   );
 });
 
-// Activate - clean old caches
+// Activate - clean old caches and claim clients immediately
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys =>
@@ -34,6 +32,12 @@ self.addEventListener('activate', event => {
 // Fetch strategy
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
+
+  // NAS proxy: always network, no cache
+  if (url.hostname === '192.168.0.135') {
+    event.respondWith(fetch(event.request));
+    return;
+  }
 
   // API calls: network-first with cache fallback
   if (url.hostname === 'api.met.no' || url.hostname === 'services.swpc.noaa.gov') {
@@ -64,8 +68,14 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Static assets: cache-first
+  // Static assets: network-first with cache fallback (ensures updates arrive)
   event.respondWith(
-    caches.match(event.request).then(cached => cached || fetch(event.request))
+    fetch(event.request)
+      .then(resp => {
+        const clone = resp.clone();
+        caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+        return resp;
+      })
+      .catch(() => caches.match(event.request))
   );
 });

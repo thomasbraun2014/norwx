@@ -679,7 +679,13 @@ async function loadData() {
 
   } catch (err) {
     console.error('Load error:', err);
-    document.getElementById('currentDesc').textContent = 'Fehler beim Laden: ' + err.message;
+    const desc = document.getElementById('currentDesc');
+    const isNetErr = err.message.includes('Failed to fetch') || err.name === 'AbortError' || err.message.includes('NetworkError');
+    if (isNetErr && !nasReachable) {
+      desc.innerHTML = 'API nicht erreichbar.<br><small style="color:var(--accent-blue)">Zuhause: http://192.168.0.135:3001 nutzen</small>';
+    } else {
+      desc.textContent = 'Fehler: ' + err.message;
+    }
   }
 
   btn.classList.remove('spinning');
