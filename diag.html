@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>BT-Wetter Diagnostics</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0e1a;
+      color: #e0e0e0;
+      padding: 16px;
+      padding-top: max(16px, env(safe-area-inset-top));
+      line-height: 1.5;
+    }
+    h1 { font-size: 20px; margin-bottom: 4px; color: #64b5f6; }
+    h2 { font-size: 16px; margin: 20px 0 8px; color: #90caf9; border-bottom: 1px solid #1e293b; padding-bottom: 4px; }
+    .subtitle { font-size: 12px; color: #666; margin-bottom: 16px; }
+    .test-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px;
+      margin-bottom: 6px;
+      border-radius: 8px;
+      background: #111827;
+      border: 1px solid #1e293b;
+    }
+    .test-status {
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+      background: #333;
+      color: #888;
+    }
+    .test-status.pass { background: #064e3b; color: #34d399; }
+    .test-status.fail { background: #7f1d1d; color: #f87171; }
+    .test-status.warn { background: #78350f; color: #fbbf24; }
+    .test-status.running { background: #1e3a5f; color: #60a5fa; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .test-info { flex: 1; min-width: 0; }
+    .test-name { font-size: 13px; font-weight: 600; }
+    .test-detail { font-size: 11px; color: #9ca3af; margin-top: 2px; word-break: break-all; }
+    .test-error { font-size: 11px; color: #f87171; margin-top: 2px; word-break: break-all; }
+    .test-time { font-size: 11px; color: #6b7280; }
+    .env-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .env-item {
+      background: #111827;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 11px;
+    }
+    .env-label { color: #6b7280; }
+    .env-value { color: #e0e0e0; font-weight: 600; word-break: break-all; }
+    .btn {
+      display: inline-block;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      background: #2563eb;
+      color: white;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      margin: 8px 4px 8px 0;
+    }
+    .btn:active { background: #1d4ed8; }
+    .btn.secondary { background: #374151; }
+    .btn.danger { background: #991b1b; }
+    .log-area {
+      background: #000;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 10px;
+      font-family: monospace;
+      font-size: 11px;
+      max-height: 300px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: #a0a0a0;
+      margin-top: 8px;
+    }
+    .log-entry { margin-bottom: 2px; }
+    .log-entry.error { color: #f87171; }
+    .log-entry.success { color: #34d399; }
+    .log-entry.info { color: #60a5fa; }
+    .section { margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+
+<h1>BT-Wetter Diagnostics</h1>
+<p class="subtitle" id="timestamp">Loading...</p>
+
+<button class="btn" onclick="runAllTests()">Run All Tests</button>
+<button class="btn secondary" onclick="runSwTests()">SW Tests Only</button>
+<button class="btn danger" onclick="unregisterSW()">Unregister SW</button>
+
+<!-- Environment -->
+<div class="section">
+  <h2>Environment</h2>
+  <div class="env-grid" id="envGrid"></div>
+</div>
+
+<!-- Service Worker Status -->
+<div class="section">
+  <h2>Service Worker</h2>
+  <div id="swTests"></div>
+</div>
+
+<!-- Direct Fetch Tests (bypassing SW) -->
+<div class="section">
+  <h2>Direct Fetch (no SW intercept)</h2>
+  <p class="subtitle">Uses fetch() from this page. If SW is active, it may still intercept.</p>
+  <div id="directTests"></div>
+</div>
+
+<!-- Fetch via new Request with explicit CORS mode -->
+<div class="section">
+  <h2>Explicit CORS Mode Fetch</h2>
+  <p class="subtitle">fetch(url, {mode:'cors'}) - Tests if explicit CORS mode changes behavior.</p>
+  <div id="corsTests"></div>
+</div>
+
+<!-- MET Norway with User-Agent header -->
+<div class="section">
+  <h2>MET Norway with Custom Headers</h2>
+  <p class="subtitle">Tests if adding User-Agent/Accept headers fixes MET.no responses.</p>
+  <div id="headerTests"></div>
+</div>
+
+<!-- Mixed Content Test -->
+<div class="section">
+  <h2>Mixed Content (HTTP from HTTPS)</h2>
+  <p class="subtitle">Tests if Safari blocks http://192.168.0.135:3001 from HTTPS page.</p>
+  <div id="mixedTests"></div>
+</div>
+
+<!-- Image Load Test (control) -->
+<div class="section">
+  <h2>Image Load Tests (control - bypasses CORS)</h2>
+  <p class="subtitle">Images are not subject to CORS. If these fail, it's a network issue, not CORS.</p>
+  <div id="imgTests"></div>
+</div>
+
+<!-- Raw Log -->
+<div class="section">
+  <h2>Detailed Log</h2>
+  <div class="log-area" id="logArea"></div>
+</div>
+
+<script>
+// ===== Logging =====
+const logArea = document.getElementById('logArea');
+function log(msg, type) {
+  const entry = document.createElement('div');
+  entry.className = 'log-entry ' + (type || '');
+  const ts = new Date().toLocaleTimeString('de-DE', {hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3});
+  entry.textContent = `[${ts}] ${msg}`;
+  logArea.appendChild(entry);
+  logArea.scrollTop = logArea.scrollHeight;
+}
+
+// ===== Environment Info =====
+function showEnvironment() {
+  document.getElementById('timestamp').textContent =
+    `Ran: ${new Date().toLocaleString('de-DE')} | Page: ${location.protocol}//${location.host}`;
+
+  const isSecure = location.protocol === 'https:';
+  const grid = document.getElementById('envGrid');
+  const items = [
+    ['Protocol', location.protocol],
+    ['Host', location.host],
+    ['Secure Context', window.isSecureContext ? 'YES' : 'NO'],
+    ['User Agent', navigator.userAgent.substring(0, 80) + '...'],
+    ['SW Support', 'serviceWorker' in navigator ? 'YES' : 'NO'],
+    ['Cache API', 'caches' in window ? 'YES' : 'NO'],
+    ['Connection', navigator.connection ? (navigator.connection.effectiveType || 'unknown') : 'N/A'],
+    ['Online', navigator.onLine ? 'YES' : 'NO'],
+  ];
+
+  grid.innerHTML = items.map(([label, value]) =>
+    `<div class="env-item"><div class="env-label">${label}</div><div class="env-value">${value}</div></div>`
+  ).join('');
+}
+
+// ===== Test Result Rendering =====
+function createTestRow(containerId, id, name) {
+  const container = document.getElementById(containerId);
+  const row = document.createElement('div');
+  row.className = 'test-row';
+  row.id = 'test-' + id;
+  row.innerHTML = `
+    <div class="test-status" id="status-${id}">?</div>
+    <div class="test-info">
+      <div class="test-name">${name}</div>
+      <div class="test-detail" id="detail-${id}">Waiting...</div>
+    </div>
+  `;
+  container.appendChild(row);
+  return row;
+}
+
+function setTestRunning(id) {
+  const el = document.getElementById('status-' + id);
+  if (el) { el.className = 'test-status running'; el.textContent = '...'; }
+  const det = document.getElementById('detail-' + id);
+  if (det) det.textContent = 'Running...';
+}
+
+function setTestPass(id, detail, timeMs) {
+  const el = document.getElementById('status-' + id);
+  if (el) { el.className = 'test-status pass'; el.textContent = 'OK'; }
+  const det = document.getElementById('detail-' + id);
+  if (det) det.innerHTML = `${detail}${timeMs !== undefined ? ` <span class="test-time">(${timeMs}ms)</span>` : ''}`;
+}
+
+function setTestFail(id, detail) {
+  const el = document.getElementById('status-' + id);
+  if (el) { el.className = 'test-status fail'; el.textContent = 'X'; }
+  const det = document.getElementById('detail-' + id);
+  if (det) det.innerHTML = `<span class="test-error">${detail}</span>`;
+}
+
+function setTestWarn(id, detail) {
+  const el = document.getElementById('status-' + id);
+  if (el) { el.className = 'test-status warn'; el.textContent = '!'; }
+  const det = document.getElementById('detail-' + id);
+  if (det) det.innerHTML = `<span style="color:#fbbf24">${detail}</span>`;
+}
+
+// ===== Service Worker Tests =====
+async function runSwTests() {
+  const container = document.getElementById('swTests');
+  container.innerHTML = '';
+
+  // Test 1: SW Registration
+  createTestRow('swTests', 'sw-support', 'Service Worker Support');
+  if (!('serviceWorker' in navigator)) {
+    setTestFail('sw-support', 'Service Worker API not available in this browser');
+    return;
+  }
+  setTestPass('sw-support', 'Service Worker API available');
+
+  // Test 2: Current SW state
+  createTestRow('swTests', 'sw-state', 'Active Service Worker');
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (reg) {
+      const sw = reg.active || reg.waiting || reg.installing;
+      const state = sw ? sw.state : 'none';
+      const scope = reg.scope;
+      log(`SW found: state=${state}, scope=${scope}`, 'info');
+      setTestPass('sw-state', `State: ${state} | Scope: ${scope}`);
+    } else {
+      log('No SW registered', 'info');
+      setTestWarn('sw-state', 'No Service Worker registered');
+    }
+  } catch (e) {
+    log('SW state check error: ' + e.message, 'error');
+    setTestFail('sw-state', e.message);
+  }
+
+  // Test 3: SW controlling this page?
+  createTestRow('swTests', 'sw-controller', 'SW Controls This Page');
+  if (navigator.serviceWorker.controller) {
+    setTestPass('sw-controller', 'YES - SW is intercepting fetch() calls from this page');
+    log('SW controller active - all fetch() calls go through SW first', 'info');
+  } else {
+    setTestWarn('sw-controller', 'NO - SW is NOT intercepting this page (good for clean testing)');
+    log('No SW controller - fetch() calls go directly to network', 'info');
+  }
+
+  // Test 4: Cache contents
+  createTestRow('swTests', 'sw-cache', 'SW Cache Contents');
+  try {
+    const cacheNames = await caches.keys();
+    log('Cache names: ' + JSON.stringify(cacheNames), 'info');
+    let totalEntries = 0;
+    let apiEntries = [];
+    for (const name of cacheNames) {
+      const cache = await caches.open(name);
+      const keys = await cache.keys();
+      totalEntries += keys.length;
+      for (const req of keys) {
+        const url = new URL(req.url);
+        if (url.hostname === 'api.met.no' || url.hostname === 'services.swpc.noaa.gov' || url.hostname === '192.168.0.135') {
+          apiEntries.push(url.hostname + url.pathname.substring(0, 40));
+        }
+      }
+    }
+    const detail = `${cacheNames.length} cache(s), ${totalEntries} entries. API cached: ${apiEntries.length > 0 ? apiEntries.join(', ') : 'none'}`;
+    setTestPass('sw-cache', detail);
+    log('Cache detail: ' + detail, 'info');
+  } catch (e) {
+    setTestFail('sw-cache', e.message);
+  }
+}
+
+// ===== Direct Fetch Tests =====
+async function runDirectTests() {
+  const container = document.getElementById('directTests');
+  container.innerHTML = '';
+
+  const endpoints = [
+    {
+      id: 'met-direct',
+      name: 'MET Norway - locationforecast',
+      url: 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=69.65&lon=18.96'
+    },
+    {
+      id: 'noaa-kp-direct',
+      name: 'NOAA - KP Index',
+      url: 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json'
+    },
+    {
+      id: 'noaa-kpf-direct',
+      name: 'NOAA - KP Forecast',
+      url: 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json'
+    }
+  ];
+
+  for (const ep of endpoints) {
+    createTestRow('directTests', ep.id, ep.name);
+    setTestRunning(ep.id);
+
+    const start = performance.now();
+    try {
+      log(`Fetching: ${ep.url}`, 'info');
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+
+      const resp = await fetch(ep.url, { signal: ctrl.signal });
+      clearTimeout(timer);
+      const elapsed = Math.round(performance.now() - start);
+
+      const corsHeader = resp.headers.get('access-control-allow-origin');
+      const contentType = resp.headers.get('content-type');
+      const respType = resp.type; // 'cors', 'basic', 'opaque', etc.
+
+      log(`Response: status=${resp.status}, type=${respType}, cors-header=${corsHeader}, content-type=${contentType}`, resp.ok ? 'success' : 'error');
+
+      if (resp.ok) {
+        // Try to parse JSON
+        const text = await resp.text();
+        const size = text.length;
+        let jsonOk = false;
+        try { JSON.parse(text); jsonOk = true; } catch(e) { /* not json */ }
+
+        setTestPass(ep.id,
+          `HTTP ${resp.status} | Type: ${respType} | CORS: ${corsHeader || 'not visible'} | Size: ${size}B | JSON: ${jsonOk ? 'valid' : 'INVALID'}`,
+          elapsed
+        );
+        log(`Success: ${size} bytes, JSON valid: ${jsonOk}`, 'success');
+      } else {
+        setTestFail(ep.id, `HTTP ${resp.status} ${resp.statusText} | Type: ${respType} | CORS: ${corsHeader || 'none'} (${elapsed}ms)`);
+        const body = await resp.text().catch(() => '(could not read body)');
+        log(`HTTP Error body: ${body.substring(0, 200)}`, 'error');
+      }
+    } catch (e) {
+      const elapsed = Math.round(performance.now() - start);
+      const errDetail = `${e.name}: ${e.message} (${elapsed}ms)`;
+      setTestFail(ep.id, errDetail);
+      log(`Fetch failed: ${errDetail}`, 'error');
+
+      // Provide interpretation
+      if (e.name === 'AbortError') {
+        log('  -> Request timed out after 15 seconds. Network issue or blocked.', 'error');
+      } else if (e.name === 'TypeError' && e.message.includes('Failed to fetch')) {
+        log('  -> "Failed to fetch" typically means: CORS blocked, network error, or SW interference.', 'error');
+      } else if (e.message.includes('NetworkError')) {
+        log('  -> Network error. Could be CORS, could be actual connectivity issue.', 'error');
+      }
+    }
+  }
+}
+
+// ===== Explicit CORS Mode Tests =====
+async function runCorsTests() {
+  const container = document.getElementById('corsTests');
+  container.innerHTML = '';
+
+  const endpoints = [
+    {
+      id: 'met-cors',
+      name: 'MET Norway (mode:cors)',
+      url: 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=69.65&lon=18.96'
+    },
+    {
+      id: 'noaa-cors',
+      name: 'NOAA KP (mode:cors)',
+      url: 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json'
+    },
+    {
+      id: 'met-nocors',
+      name: 'MET Norway (mode:no-cors)',
+      url: 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=69.65&lon=18.96'
+    },
+    {
+      id: 'noaa-nocors',
+      name: 'NOAA KP (mode:no-cors)',
+      url: 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json'
+    }
+  ];
+
+  for (const ep of endpoints) {
+    createTestRow('corsTests', ep.id, ep.name);
+    setTestRunning(ep.id);
+
+    const mode = ep.id.includes('nocors') ? 'no-cors' : 'cors';
+    const start = performance.now();
+
+    try {
+      log(`Fetching ${ep.url} with mode:${mode}`, 'info');
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+
+      const resp = await fetch(ep.url, { mode: mode, signal: ctrl.signal });
+      clearTimeout(timer);
+      const elapsed = Math.round(performance.now() - start);
+
+      if (mode === 'no-cors') {
+        // Opaque response - cannot read status or body
+        setTestPass(ep.id,
+          `Response type: ${resp.type} | Status: ${resp.status} (opaque responses always show 0) | Cannot read body in no-cors mode`,
+          elapsed
+        );
+        log(`no-cors response: type=${resp.type}, status=${resp.status}`, 'info');
+      } else {
+        const corsHeader = resp.headers.get('access-control-allow-origin');
+        if (resp.ok) {
+          const text = await resp.text();
+          setTestPass(ep.id,
+            `HTTP ${resp.status} | Type: ${resp.type} | CORS: ${corsHeader || 'not visible'} | Size: ${text.length}B`,
+            elapsed
+          );
+        } else {
+          setTestFail(ep.id, `HTTP ${resp.status} | Type: ${resp.type} | CORS: ${corsHeader || 'none'} (${elapsed}ms)`);
+        }
+      }
+    } catch (e) {
+      const elapsed = Math.round(performance.now() - start);
+      setTestFail(ep.id, `mode:${mode} -> ${e.name}: ${e.message} (${elapsed}ms)`);
+      log(`mode:${mode} failed: ${e.name}: ${e.message}`, 'error');
+    }
+  }
+}
+
+// ===== Header Tests (MET Norway with User-Agent) =====
+async function runHeaderTests() {
+  const container = document.getElementById('headerTests');
+  container.innerHTML = '';
+
+  const tests = [
+    {
+      id: 'met-ua',
+      name: 'MET.no with User-Agent header',
+      url: 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=69.65&lon=18.96',
+      headers: { 'User-Agent': 'BT-Wetter/1.0 github.com/thomasbraun2014/norwx' }
+    },
+    {
+      id: 'met-accept',
+      name: 'MET.no with Accept: application/json',
+      url: 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=69.65&lon=18.96',
+      headers: { 'Accept': 'application/json' }
+    },
+    {
+      id: 'met-both',
+      name: 'MET.no with both headers',
+      url: 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=69.65&lon=18.96',
+      headers: {
+        'User-Agent': 'BT-Wetter/1.0 github.com/thomasbraun2014/norwx',
+        'Accept': 'application/json'
+      }
+    }
+  ];
+
+  for (const t of tests) {
+    createTestRow('headerTests', t.id, t.name);
+    setTestRunning(t.id);
+    const start = performance.now();
+
+    try {
+      log(`Fetching ${t.url} with headers: ${JSON.stringify(t.headers)}`, 'info');
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+
+      const resp = await fetch(t.url, {
+        headers: t.headers,
+        signal: ctrl.signal
+      });
+      clearTimeout(timer);
+      const elapsed = Math.round(performance.now() - start);
+
+      if (resp.ok) {
+        const text = await resp.text();
+        setTestPass(t.id, `HTTP ${resp.status} | Type: ${resp.type} | Size: ${text.length}B`, elapsed);
+        log(`Header test success: ${text.length} bytes`, 'success');
+      } else {
+        const body = await resp.text().catch(() => '');
+        setTestFail(t.id, `HTTP ${resp.status} ${resp.statusText} (${elapsed}ms) | Body: ${body.substring(0, 100)}`);
+        log(`Header test failed: ${resp.status}`, 'error');
+      }
+    } catch (e) {
+      const elapsed = Math.round(performance.now() - start);
+      setTestFail(t.id, `${e.name}: ${e.message} (${elapsed}ms)`);
+      log(`Header test error: ${e.name}: ${e.message}`, 'error');
+
+      if (e.message.includes('not allowed by Access-Control-Allow-Headers')) {
+        log('  -> Custom header caused CORS preflight failure! The server does not allow this header.', 'error');
+      }
+    }
+  }
+}
+
+// ===== Mixed Content Tests =====
+async function runMixedTests() {
+  const container = document.getElementById('mixedTests');
+  container.innerHTML = '';
+
+  createTestRow('mixedTests', 'mixed-nas', 'HTTP NAS proxy from HTTPS page');
+  setTestRunning('mixed-nas');
+
+  const start = performance.now();
+  try {
+    log('Fetching http://192.168.0.135:3001/api/kp-index (mixed content test)', 'info');
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const resp = await fetch('http://192.168.0.135:3001/api/kp-index', { signal: ctrl.signal });
+    clearTimeout(timer);
+    const elapsed = Math.round(performance.now() - start);
+
+    if (resp.ok) {
+      setTestPass('mixed-nas', `HTTP ${resp.status} - NAS proxy reachable (${elapsed}ms). You are on home WiFi.`);
+      log('NAS proxy reachable', 'success');
+    } else {
+      setTestFail('mixed-nas', `HTTP ${resp.status} (${elapsed}ms)`);
+    }
+  } catch (e) {
+    const elapsed = Math.round(performance.now() - start);
+    if (location.protocol === 'https:') {
+      setTestFail('mixed-nas', `${e.name}: ${e.message} (${elapsed}ms) -- EXPECTED on HTTPS: Mixed content is blocked by Safari`);
+      log('Mixed content blocked as expected on HTTPS page', 'info');
+    } else {
+      setTestFail('mixed-nas', `${e.name}: ${e.message} (${elapsed}ms) -- NAS unreachable (not on home WiFi?)`);
+    }
+  }
+
+  // Test: Does the page know it is on HTTPS?
+  createTestRow('mixedTests', 'mixed-context', 'Security Context Check');
+  if (location.protocol === 'https:') {
+    setTestWarn('mixed-context',
+      'Page is HTTPS (GitHub Pages). HTTP fetch to 192.168.0.135 is MIXED CONTENT and will be blocked by Safari. ' +
+      'The checkNasProxy() function in app.js will silently fail, but the error/timeout could affect Safari behavior.'
+    );
+  } else {
+    setTestPass('mixed-context', 'Page is HTTP. Mixed content is not an issue.');
+  }
+}
+
+// ===== Image Tests (Control) =====
+async function runImgTests() {
+  const container = document.getElementById('imgTests');
+  container.innerHTML = '';
+
+  const images = [
+    {
+      id: 'img-met',
+      name: 'yr.no meteogram (img tag)',
+      url: 'https://www.yr.no/en/content/1-305409/meteogram.svg?mode=dark'
+    },
+    {
+      id: 'img-icon',
+      name: 'Weather icon from GitHub',
+      url: 'https://raw.githubusercontent.com/metno/weathericons/main/weather/svg/clearsky_day.svg'
+    }
+  ];
+
+  for (const img of images) {
+    createTestRow('imgTests', img.id, img.name);
+    setTestRunning(img.id);
+
+    await new Promise(resolve => {
+      const start = performance.now();
+      const el = new Image();
+      const timer = setTimeout(() => {
+        setTestFail(img.id, 'Timeout after 10 seconds');
+        log(`Image timeout: ${img.url}`, 'error');
+        resolve();
+      }, 10000);
+
+      el.onload = () => {
+        clearTimeout(timer);
+        const elapsed = Math.round(performance.now() - start);
+        setTestPass(img.id, `Loaded (${el.naturalWidth}x${el.naturalHeight})`, elapsed);
+        log(`Image loaded: ${img.url}`, 'success');
+        resolve();
+      };
+      el.onerror = (e) => {
+        clearTimeout(timer);
+        const elapsed = Math.round(performance.now() - start);
+        setTestFail(img.id, `Image load failed (${elapsed}ms) - Network issue, not CORS`);
+        log(`Image failed: ${img.url}`, 'error');
+        resolve();
+      };
+      el.src = img.url;
+    });
+  }
+}
+
+// ===== Unregister SW =====
+async function unregisterSW() {
+  log('Unregistering all Service Workers...', 'info');
+  try {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    for (const reg of regs) {
+      await reg.unregister();
+      log('Unregistered SW: ' + reg.scope, 'success');
+    }
+
+    // Also clear caches
+    const cacheNames = await caches.keys();
+    for (const name of cacheNames) {
+      await caches.delete(name);
+      log('Deleted cache: ' + name, 'success');
+    }
+
+    setTestWarn('sw-state', 'UNREGISTERED - Reload page to test without SW');
+    setTestWarn('sw-controller', 'UNREGISTERED - Reload page, then run tests again');
+    alert('Service Worker unregistered and caches cleared. Reload this page, then run tests again to compare results WITHOUT the Service Worker.');
+  } catch (e) {
+    log('Unregister error: ' + e.message, 'error');
+    alert('Error: ' + e.message);
+  }
+}
+
+// ===== Run All =====
+async function runAllTests() {
+  log('========== Starting all tests ==========', 'info');
+  showEnvironment();
+  await runSwTests();
+  await runDirectTests();
+  await runCorsTests();
+  await runHeaderTests();
+  await runMixedTests();
+  await runImgTests();
+  log('========== All tests complete ==========', 'info');
+
+  // Summary
+  log('', 'info');
+  log('DIAGNOSIS GUIDE:', 'info');
+  log('1. If Direct Fetch fails but Image Tests pass -> CORS or SW issue', 'info');
+  log('2. If Direct Fetch fails AND Image Tests fail -> Network/connectivity issue', 'info');
+  log('3. If tests pass here but app.js fails -> SW interference (click "Unregister SW", reload app)', 'info');
+  log('4. If NOAA passes but MET fails -> MET Norway blocking (User-Agent or rate limit)', 'info');
+  log('5. If everything passes -> Problem is in app.js error handling or NAS proxy fallback', 'info');
+}
+
+// Auto-detect environment on load
+showEnvironment();
+log('Diagnostic page loaded. Tap "Run All Tests" to begin.', 'info');
+log('Page URL: ' + location.href, 'info');
+log('Protocol: ' + location.protocol, 'info');
+log('SW controller active: ' + !!navigator.serviceWorker?.controller, 'info');
+</script>
+</body>
+</html>

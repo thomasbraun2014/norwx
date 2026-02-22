@@ -1,10 +1,10 @@
-const CACHE_NAME = 'btwetter-v6';
+const CACHE_NAME = 'btwetter-v7';
 const STATIC_ASSETS = [
   './',
   './index.html',
-  './style.css?v=5',
-  './app.js?v=5',
-  './suncalc.js?v=5',
+  './style.css?v=6',
+  './app.js?v=6',
+  './suncalc.js?v=6',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -33,19 +33,42 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // NAS proxy: always network, no cache
+  // NAS proxy: always network, no cache - with error handling
   if (url.hostname === '192.168.0.135') {
-    event.respondWith(fetch(event.request));
+    event.respondWith(
+      fetch(event.request).catch(() => new Response('NAS unreachable', { status: 503 }))
+    );
     return;
   }
 
-  // API calls: network-first with cache fallback
+  // Same-origin /api/* calls: network-first with cache fallback
+  if (url.origin === self.location.origin && url.pathname.startsWith('/api/')) {
+    event.respondWith(
+      fetch(event.request)
+        .then(resp => {
+          if (resp.ok) {
+            const clone = resp.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone))
+              .catch(err => console.warn('SW cache put failed:', err));
+          }
+          return resp;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // External API calls: network-first with cache fallback (Safari-safe)
   if (url.hostname === 'api.met.no' || url.hostname === 'services.swpc.noaa.gov') {
     event.respondWith(
       fetch(event.request)
         .then(resp => {
-          const clone = resp.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+          // Only cache successful, non-opaque responses (Safari cross-origin safety)
+          if (resp.ok && resp.type !== 'opaque') {
+            const clone = resp.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone))
+              .catch(err => console.warn('SW cache put failed:', err));
+          }
           return resp;
         })
         .catch(() => caches.match(event.request))

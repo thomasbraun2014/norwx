@@ -88,6 +88,14 @@ let nasReachable = null;
 
 async function checkNasProxy() {
   if (nasReachable !== null) return nasReachable;
+
+  // HTTPS page cannot fetch HTTP NAS proxy (mixed content - Safari blocks this)
+  if (location.protocol === 'https:') {
+    nasReachable = false;
+    console.log('NAS proxy skipped: HTTPS page cannot fetch HTTP');
+    return false;
+  }
+
   try {
     const ctrl = new AbortController();
     setTimeout(() => ctrl.abort(), 3000);
@@ -100,36 +108,84 @@ async function checkNasProxy() {
   return nasReachable;
 }
 
-// ===== Weather Map URLs =====
-function radarUrl(type, format, area) {
-  if (nasReachable) {
-    return `${NAS_PROXY}/api/radar?type=${type}&format=${format}&area=${area}&t=${Date.now()}`;
+// ===== Fetch Helpers =====
+
+// Try multiple URLs in order, return first successful JSON response
+async function tryFetch(urls, timeoutMs) {
+  let lastError;
+  for (const url of urls) {
+    try {
+      const data = await fetchJson(url, timeoutMs || 10000);
+      return data;
+    } catch (e) {
+      lastError = e;
+      console.warn('tryFetch failed for', url, e.message);
+    }
   }
-  return `https://api.met.no/weatherapi/radar/2.0/${type}.${format}?area=${area}`;
+  throw lastError;
+}
+
+// Build ordered URL list: NAS first when reachable, same-origin /api/ as middle layer, direct as fallback
+function buildUrlList(nasUrl, proxyUrl, directUrl) {
+  if (nasReachable) {
+    return [nasUrl, proxyUrl, directUrl];
+  }
+  // On HTTPS: never include HTTP NAS URL (mixed content blocked by Safari)
+  if (location.protocol === 'https:') {
+    return [proxyUrl, directUrl];
+  }
+  return [proxyUrl, directUrl, nasUrl];
+}
+
+// ===== Weather Map URLs =====
+
+// Build image URL list with same-origin proxy as preferred, fallbacks included
+function radarUrls(type, format, area) {
+  const proxyUrl = `/api/radar?type=${type}&format=${format}&area=${area}&t=${Date.now()}`;
+  const nasUrl = `${NAS_PROXY}/api/radar?type=${type}&format=${format}&area=${area}&t=${Date.now()}`;
+  const directUrl = `https://api.met.no/weatherapi/radar/2.0/${type}.${format}?area=${area}`;
+  if (nasReachable) return [nasUrl, proxyUrl, directUrl];
+  if (location.protocol === 'https:') return [proxyUrl, directUrl];
+  return [proxyUrl, directUrl, nasUrl];
+}
+
+function meteogramUrls(yrId) {
+  if (!yrId) return [];
+  const proxyUrl = `/api/meteogram?id=${yrId}&t=${Date.now()}`;
+  const nasUrl = `${NAS_PROXY}/api/meteogram?id=${yrId}&t=${Date.now()}`;
+  const directUrl = `https://www.yr.no/en/content/${yrId}/meteogram.svg?mode=dark`;
+  if (nasReachable) return [nasUrl, proxyUrl, directUrl];
+  if (location.protocol === 'https:') return [proxyUrl, directUrl];
+  return [proxyUrl, directUrl, nasUrl];
+}
+
+// Primary URL for map display (first in the list)
+function radarUrl(type, format, area) {
+  return radarUrls(type, format, area)[0];
 }
 
 function meteogramUrl(yrId) {
-  if (!yrId) return '';
-  if (nasReachable) {
-    return `${NAS_PROXY}/api/meteogram?id=${yrId}&t=${Date.now()}`;
-  }
-  return `https://www.yr.no/en/content/${yrId}/meteogram.svg?mode=dark`;
+  const urls = meteogramUrls(yrId);
+  return urls.length > 0 ? urls[0] : '';
 }
 
 const WEATHER_MAPS = {
   meteogram: {
     label: 'Meteogramm',
     getUrl: () => meteogramUrl(getActiveLocation().yrId),
+    getUrls: () => meteogramUrls(getActiveLocation().yrId),
     info: 'Yr.no 3-Tage Meteogramm fuer den aktuellen Ort'
   },
   radar: {
     label: 'Radar',
     getUrl: () => radarUrl('reflectivity', 'gif', 'norway'),
+    getUrls: () => radarUrls('reflectivity', 'gif', 'norway'),
     info: 'Niederschlagsradar Norwegen (letzte 3h Animation)'
   },
   radar5: {
     label: 'Radar 5-Stufen',
     getUrl: () => radarUrl('5level_reflectivity', 'gif', 'norway'),
+    getUrls: () => radarUrls('5level_reflectivity', 'gif', 'norway'),
     info: 'Niederschlag in 5 Intensitaetsstufen (Animation)'
   },
   regional: {
@@ -138,6 +194,10 @@ const WEATHER_MAPS = {
       const loc = getActiveLocation();
       return radarUrl('reflectivity', 'gif', getRadarArea(loc.lat, loc.lon));
     },
+    getUrls: () => {
+      const loc = getActiveLocation();
+      return radarUrls('reflectivity', 'gif', getRadarArea(loc.lat, loc.lon));
+    },
     info: 'Regionaler Radar fuer den aktuellen Ort'
   },
   preciptype: {
@@ -145,6 +205,10 @@ const WEATHER_MAPS = {
     getUrl: () => {
       const loc = getActiveLocation();
       return radarUrl('preciptype', 'gif', getRadarArea(loc.lat, loc.lon));
+    },
+    getUrls: () => {
+      const loc = getActiveLocation();
+      return radarUrls('preciptype', 'gif', getRadarArea(loc.lat, loc.lon));
     },
     info: 'Regen/Schnee/Schneeregen Unterscheidung (Animation)'
   }
@@ -193,16 +257,11 @@ async function fetchWeather(lat, lon) {
   if (cached && Date.now() - cached.time < 600000) return cached.data;
 
   const directUrl = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lon}`;
-  const proxyUrl = `${NAS_PROXY}/api/weather?lat=${lat}&lon=${lon}`;
+  const proxyUrl = `/api/weather?lat=${lat}&lon=${lon}`;
+  const nasUrl = `${NAS_PROXY}/api/weather?lat=${lat}&lon=${lon}`;
 
-  let data;
-  if (nasReachable) {
-    try { data = await fetchJson(proxyUrl, 12000); }
-    catch { data = await fetchJson(directUrl, 12000); }
-  } else {
-    try { data = await fetchJson(directUrl, 12000); }
-    catch { data = await fetchJson(proxyUrl, 12000); }
-  }
+  const urls = buildUrlList(nasUrl, proxyUrl, directUrl);
+  const data = await tryFetch(urls, 12000);
 
   weatherCache[key] = { data, time: Date.now() };
   return data;
@@ -212,16 +271,11 @@ async function fetchKpIndex() {
   if (kpData && Date.now() - kpData.time < 300000) return kpData.data;
 
   const directUrl = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json';
-  const proxyUrl = `${NAS_PROXY}/api/kp-index`;
+  const proxyUrl = '/api/kp-index';
+  const nasUrl = `${NAS_PROXY}/api/kp-index`;
 
-  let data;
-  if (nasReachable) {
-    try { data = await fetchJson(proxyUrl, 10000); }
-    catch { data = await fetchJson(directUrl, 10000); }
-  } else {
-    try { data = await fetchJson(directUrl, 10000); }
-    catch { data = await fetchJson(proxyUrl, 10000); }
-  }
+  const urls = buildUrlList(nasUrl, proxyUrl, directUrl);
+  const data = await tryFetch(urls, 10000);
 
   kpData = { data, time: Date.now() };
   return data;
@@ -231,16 +285,11 @@ async function fetchKpForecast() {
   if (kpForecastCache && Date.now() - kpForecastCache.time < 300000) return kpForecastCache.data;
 
   const directUrl = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json';
-  const proxyUrl = `${NAS_PROXY}/api/kp-forecast`;
+  const proxyUrl = '/api/kp-forecast';
+  const nasUrl = `${NAS_PROXY}/api/kp-forecast`;
 
-  let data;
-  if (nasReachable) {
-    try { data = await fetchJson(proxyUrl, 10000); }
-    catch { data = await fetchJson(directUrl, 10000); }
-  } else {
-    try { data = await fetchJson(directUrl, 10000); }
-    catch { data = await fetchJson(proxyUrl, 10000); }
-  }
+  const urls = buildUrlList(nasUrl, proxyUrl, directUrl);
+  const data = await tryFetch(urls, 10000);
 
   kpForecastCache = { data, time: Date.now() };
   return data;
@@ -618,7 +667,8 @@ function loadMap(type) {
 
   const container = document.getElementById('mapContainer');
   const info = document.getElementById('mapInfo');
-  const url = config.getUrl();
+  const urls = config.getUrls();
+  const url = urls[0];
 
   if (!url) {
     container.innerHTML = '<div class="map-loading">Nicht verfuegbar fuer GPS-Standort</div>';
@@ -626,11 +676,32 @@ function loadMap(type) {
     return;
   }
 
+  // Build fallback chain for image loading
+  const fallbacks = urls.slice(1);
+
   container.innerHTML = `<div class="map-loading" id="mapLoading">Laden...</div>
     <img class="weather-map-img" src="${url}" alt="${config.label}"
       onload="this.previousElementSibling.classList.add('hidden')"
-      onerror="this.previousElementSibling.textContent='Karte nicht verfuegbar'">`;
+      onerror="mapImageFallback(this)">`;
+
+  // Store fallback URLs on the image element
+  const img = container.querySelector('.weather-map-img');
+  img._fallbackUrls = fallbacks;
+
   info.textContent = config.info;
+}
+
+// Global fallback handler for map images
+function mapImageFallback(img) {
+  if (img._fallbackUrls && img._fallbackUrls.length > 0) {
+    const nextUrl = img._fallbackUrls.shift();
+    console.warn('Map image failed, trying fallback:', nextUrl);
+    img.src = nextUrl;
+  } else {
+    // All URLs exhausted
+    const loading = img.previousElementSibling;
+    if (loading) loading.textContent = 'Karte nicht verfuegbar';
+  }
 }
 
 function renderYrMapLinks() {
@@ -729,7 +800,9 @@ async function init() {
   setInterval(loadData, 600000);
 
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW reg failed:', e));
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then(reg => { setInterval(() => reg.update(), 300000); })
+      .catch(e => console.warn('SW reg failed:', e));
   }
 }
 
