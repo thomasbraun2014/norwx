@@ -893,7 +893,7 @@ function renderAurora(weather, kpArr, sunData) {
     'Keine Chance', 'Sehr unwahrscheinlich', 'Unwahrscheinlich',
     'Moeglich', 'Gute Chancen', 'Ausgezeichnet'
   ];
-  const ratingColors = ['#666', '#ff5252', '#ff5252', '#ffab40', '#00e676', '#7c4dff'];
+  const ratingColors = ['#666', '#ff1744', '#ff9100', '#ffea00', '#00e676', '#00e5ff'];
 
   let summary = [];
   if (darknessLevel === 'day') summary.push('Es ist zu hell fuer Nordlichter');
@@ -995,8 +995,8 @@ function renderHourlyAurora(hourlyData) {
 
   lastHourlyAuroraData = hourlyData;
 
-  const ratingColors = ['#555', '#ff5252', '#ff5252', '#ffab40', '#00e676', '#7c4dff'];
-  const ratingLabels = ['--', 'Gering', 'Gering', 'Mittel', 'Gut', 'Top'];
+  const ratingColors = ['#555', '#ff1744', '#ff9100', '#ffea00', '#00e676', '#00e5ff'];
+  const ratingLabels = ['--', 'Sehr gering', 'Gering', 'Moeglich', 'Gut', 'Sehr gut'];
 
   container.innerHTML = hourlyData.map(h => {
     const hour = h.isNow ? 'Jetzt' : h.time.getHours().toString().padStart(2, '0') + ':00';
