@@ -11,7 +11,7 @@
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="style.css?v=9">
+  <link rel="stylesheet" href="style.css?v=10">
   <title>BT-Wetter</title>
 </head>
 <body>
@@ -89,6 +89,49 @@
             <div class="kp-segment" data-level="9"></div>
           </div>
           <div class="factor-info" id="kpInfo"></div>
+        </div>
+
+        <!-- Bz (IMF) -->
+        <div class="aurora-factor">
+          <div class="factor-header">
+            <span class="factor-name">Bz (Magnetfeld)</span>
+            <span class="factor-value" id="bzValue">-- nT</span>
+          </div>
+          <div class="bz-meter" id="bzMeter">
+            <div class="bz-bar" id="bzBar"></div>
+            <div class="bz-zero"></div>
+          </div>
+          <div class="bz-scale">
+            <span>-20 nT</span>
+            <span>0</span>
+            <span>+20 nT</span>
+          </div>
+          <div class="factor-info" id="bzInfo">Negatives Bz oeffnet die Magnetosphaere. Unter -5 nT ist gut.</div>
+        </div>
+
+        <!-- Solar Wind -->
+        <div class="aurora-factor">
+          <div class="factor-header">
+            <span class="factor-name">Sonnenwind</span>
+            <span class="factor-value" id="solarWindValue">-- km/s</span>
+          </div>
+          <div class="solar-wind-details" id="solarWindDetails">
+            <span class="sw-speed">Geschwindigkeit: -- km/s</span>
+            <span class="sw-density">Dichte: -- p/cm&sup3;</span>
+          </div>
+          <div class="factor-info">Hohe Geschwindigkeit (&gt;500) + hohe Dichte verstaerkt Aurora.</div>
+        </div>
+
+        <!-- OVATION Model -->
+        <div class="aurora-factor">
+          <div class="factor-header">
+            <span class="factor-name">OVATION Modell</span>
+            <span class="factor-value" id="ovationValue">--%</span>
+          </div>
+          <div class="ovation-bar">
+            <div class="ovation-fill" id="ovationFill"></div>
+          </div>
+          <div class="factor-info" id="ovationInfo">NOAA-Vorhersagemodell fuer diesen Standort.</div>
         </div>
 
         <!-- Cloud Cover -->
@@ -185,7 +228,7 @@
     </footer>
   </main>
 
-  <script src="suncalc.js?v=9"></script>
-  <script src="app.js?v=9"></script>
+  <script src="suncalc.js?v=10"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>

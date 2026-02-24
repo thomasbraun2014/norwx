@@ -426,6 +426,83 @@ body {
   background: var(--danger);
 }
 
+/* Bz Meter */
+.bz-meter {
+  position: relative;
+  height: 12px;
+  background: linear-gradient(90deg, rgba(0,230,118,0.15), rgba(255,255,255,0.06) 50%, rgba(255,82,82,0.15));
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.bz-bar {
+  position: absolute;
+  height: 100%;
+  border-radius: 6px;
+  transition: left 0.5s ease, width 0.5s ease, background 0.3s;
+}
+
+.bz-zero {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: rgba(255,255,255,0.3);
+  transform: translateX(-1px);
+}
+
+.bz-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0.6;
+  margin-top: 2px;
+}
+
+/* Solar Wind Details */
+.solar-wind-details {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.sw-speed, .sw-density {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* OVATION Bar */
+.ovation-bar {
+  height: 8px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.ovation-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--accent-green);
+  transition: width 0.5s ease;
+  width: 0%;
+}
+
+/* Aurora Hour Extended Info */
+.aurora-hour-bz {
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.aurora-hour-ov {
+  font-size: 9px;
+  color: var(--accent-green);
+}
+
 /* Cloud Bar */
 .cloud-bar {
   height: 8px;

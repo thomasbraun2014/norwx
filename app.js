@@ -280,6 +280,8 @@ let currentLocationIdx = 0;
 let weatherCache = {};
 let kpData = null;
 let kpForecastCache = null;
+let solarWindCache = null;
+let ovationCache = null;
 let auroraInterval = 1;
 let gpsLocation = null;
 let isGpsActive = false;
@@ -442,6 +444,127 @@ async function fetchKpForecast() {
   const data = await tryFetch(urls, 10000);
   kpForecastCache = { data, time: Date.now() };
   return data;
+}
+
+// ===== Solar Wind (Bz + Speed + Density) =====
+async function fetchSolarWind() {
+  if (solarWindCache && Date.now() - solarWindCache.time < 300000) return solarWindCache.data;
+
+  const directMag = 'https://services.swpc.noaa.gov/products/solar-wind/mag-2-hour.json';
+  const directPlasma = 'https://services.swpc.noaa.gov/products/solar-wind/plasma-2-hour.json';
+
+  let result;
+  if (isGitHubPages) {
+    // NOAA has CORS - try direct fetch, static as fallback
+    try {
+      const [magData, plasmaData] = await Promise.all([
+        fetchJson(directMag, 10000),
+        fetchJson(directPlasma, 10000)
+      ]);
+      result = parseSolarWindData(magData, plasmaData);
+    } catch {
+      result = await fetchJson('./data/solar-wind.json', 5000);
+    }
+  } else {
+    // NAS/Proxy: try combined endpoint first
+    const proxyUrl = '/api/solar-wind';
+    const nasUrl = `${NAS_PROXY}/api/solar-wind`;
+    try {
+      const urls = buildUrlList(nasUrl, proxyUrl, null);
+      result = await tryFetch(urls.filter(Boolean), 10000);
+    } catch {
+      // Fallback: direct NOAA fetch
+      try {
+        const [magData, plasmaData] = await Promise.all([
+          fetchJson(directMag, 10000),
+          fetchJson(directPlasma, 10000)
+        ]);
+        result = parseSolarWindData(magData, plasmaData);
+      } catch {
+        result = { bz: null, bt: null, speed: null, density: null, timestamp: null };
+      }
+    }
+  }
+
+  solarWindCache = { data: result, time: Date.now() };
+  return result;
+}
+
+function parseSolarWindData(magData, plasmaData) {
+  let bz = null, bt = null, speed = null, density = null, timestamp = null;
+  for (let i = magData.length - 1; i >= 1; i--) {
+    const row = magData[i];
+    if (row[3] !== null && row[3] !== '') {
+      bz = parseFloat(row[3]);
+      bt = parseFloat(row[6]) || null;
+      timestamp = row[0];
+      break;
+    }
+  }
+  for (let i = plasmaData.length - 1; i >= 1; i--) {
+    const row = plasmaData[i];
+    if (row[1] !== null && row[1] !== '' && row[2] !== null && row[2] !== '') {
+      density = parseFloat(row[1]);
+      speed = parseFloat(row[2]);
+      if (!timestamp) timestamp = row[0];
+      break;
+    }
+  }
+  return { bz, bt, speed, density, timestamp };
+}
+
+// ===== OVATION Aurora Model =====
+async function fetchOvation(lat, lon) {
+  if (ovationCache && Date.now() - ovationCache.time < 900000) {
+    return getOvationForLocation(ovationCache.data, lat, lon);
+  }
+
+  const directUrl = 'https://services.swpc.noaa.gov/json/ovation_aurora_latest.json';
+
+  let data;
+  if (isGitHubPages) {
+    try {
+      data = await fetchJson(directUrl, 15000);
+    } catch {
+      try {
+        data = await fetchJson('./data/ovation.json', 5000);
+      } catch {
+        return 0;
+      }
+    }
+  } else {
+    const proxyUrl = '/api/ovation';
+    const nasUrl = `${NAS_PROXY}/api/ovation`;
+    try {
+      const urls = buildUrlList(nasUrl, proxyUrl, directUrl);
+      data = await tryFetch(urls, 15000);
+    } catch {
+      return 0;
+    }
+  }
+
+  ovationCache = { data, time: Date.now() };
+  return getOvationForLocation(data, lat, lon);
+}
+
+function getOvationForLocation(ovationData, lat, lon) {
+  if (!ovationData || !ovationData.coordinates) return 0;
+  const coords = ovationData.coordinates;
+  let nearest = 0;
+  let minDist = Infinity;
+  for (let i = 0; i < coords.length; i++) {
+    const c = coords[i];
+    const cLon = c[0] > 180 ? c[0] - 360 : c[0];
+    const cLat = c[1];
+    const dlat = cLat - lat;
+    const dlon = (cLon - lon) * Math.cos(lat * Math.PI / 180);
+    const dist = dlat * dlat + dlon * dlon;
+    if (dist < minDist) {
+      minDist = dist;
+      nearest = c[2] || 0;
+    }
+  }
+  return nearest;
 }
 
 // ===== 16-Tage Vorhersage (Open-Meteo Daily API) =====
@@ -841,21 +964,91 @@ function initForecastTabs() {
   });
 }
 
-// ===== Aurora Rating Algorithm =====
-function computeAuroraRating(kp, cloudFrac, sunAltDeg, lat) {
+// ===== Aurora Rating Algorithm (Extended 7-Factor) =====
+function computeSpaceWeatherScore(kp, bz, speed, density, ovationProb, lat) {
   const minKp = getMinKp(lat);
-  let rating = 0;
-  if (kp >= minKp) rating += 2;
-  else if (kp >= minKp - 1) rating += 1;
-  if (sunAltDeg < -18) rating += 2;
-  else if (sunAltDeg < -12) rating += 1.5;
-  else if (sunAltDeg < -6) rating += 0.5;
-  if (cloudFrac < 25) rating += 1;
-  else if (cloudFrac < 50) rating += 0.5;
-  return Math.min(5, Math.round(rating));
+  let score = 0;
+
+  // KP contribution (0-3.5)
+  const kpExcess = kp - minKp;
+  if (kpExcess >= 2) score += 3.5;
+  else if (kpExcess >= 1) score += 2.5;
+  else if (kpExcess >= 0) score += 1.5;
+  else if (kpExcess >= -1) score += 0.5;
+
+  // Bz contribution (0-3) - negative = good
+  if (bz !== null) {
+    if (bz <= -10) score += 3;
+    else if (bz <= -5) score += 2;
+    else if (bz <= -2) score += 1;
+    else if (bz <= 0) score += 0.3;
+  }
+
+  // Solar wind coupling (0-2)
+  if (bz !== null && speed !== null) {
+    const couplingFactor = speed * Math.max(0, -bz) / 1000;
+    if (couplingFactor > 5) score += 2;
+    else if (couplingFactor > 2) score += 1.5;
+    else if (couplingFactor > 1) score += 1;
+    else if (couplingFactor > 0.3) score += 0.5;
+  }
+
+  // OVATION bonus (0-1.5)
+  if (ovationProb > 30) score += 1.5;
+  else if (ovationProb > 15) score += 1;
+  else if (ovationProb > 5) score += 0.5;
+
+  return Math.min(10, score);
 }
 
-function renderAurora(weather, kpArr, sunData) {
+function computeVisibilityScore(sunAlt, cloudFrac, moonFrac) {
+  let score = 0;
+
+  // Darkness (0-3)
+  if (sunAlt < -18) score += 3;
+  else if (sunAlt < -12) score += 2;
+  else if (sunAlt < -6) score += 1;
+
+  // Clouds (0-1.5)
+  if (cloudFrac < 20) score += 1.5;
+  else if (cloudFrac < 40) score += 1;
+  else if (cloudFrac < 60) score += 0.5;
+
+  // Moon (0-0.5) - only relevant when dark
+  if (sunAlt < -6) {
+    if (moonFrac < 0.3) score += 0.5;
+    else if (moonFrac < 0.6) score += 0.25;
+  }
+
+  return score;
+}
+
+function computeAuroraRating(kp, cloudFrac, sunAltDeg, lat, bz, speed, density, ovationProb, moonFrac) {
+  if (sunAltDeg >= -6) return 0; // Daylight = 0 stars
+
+  // If no extended data, fall back to simple algorithm
+  if ((bz === null || bz === undefined) && (ovationProb === undefined || ovationProb === 0)) {
+    const minKp = getMinKp(lat);
+    let rating = 0;
+    if (kp >= minKp) rating += 2;
+    else if (kp >= minKp - 1) rating += 1;
+    if (sunAltDeg < -18) rating += 2;
+    else if (sunAltDeg < -12) rating += 1.5;
+    else if (sunAltDeg < -6) rating += 0.5;
+    if (cloudFrac < 25) rating += 1;
+    else if (cloudFrac < 50) rating += 0.5;
+    return Math.min(5, Math.round(rating));
+  }
+
+  const space = computeSpaceWeatherScore(kp, bz, speed, density, ovationProb || 0, lat);
+  const vis = computeVisibilityScore(sunAltDeg, cloudFrac, moonFrac || 0);
+
+  // Weighted combination: Space (60%) + Visibility (40%)
+  const combined = (space / 10) * 3 + (vis / 5) * 2;
+  return Math.min(5, Math.round(combined));
+}
+
+function renderAurora(weather, kpArr, sunData, solarWind, ovationProb) {
   const loc = getActiveLocation();
   const minKp = getMinKp(loc.lat);
 
@@ -887,7 +1080,13 @@ function renderAurora(weather, kpArr, sunData) {
     return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
   };
 
-  const rating = computeAuroraRating(kpVal, cloudFrac, sunAlt, loc.lat);
+  // Extended data
+  const bz = solarWind ? solarWind.bz : null;
+  const speed = solarWind ? solarWind.speed : null;
+  const density = solarWind ? solarWind.density : null;
+  const ovProb = ovationProb || 0;
+
+  const rating = computeAuroraRating(kpVal, cloudFrac, sunAlt, loc.lat, bz, speed, density, ovProb, moonPhase);
 
   const ratingLabels = [
     'Keine Chance', 'Sehr unwahrscheinlich', 'Unwahrscheinlich',
@@ -895,14 +1094,31 @@ function renderAurora(weather, kpArr, sunData) {
   ];
   const ratingColors = ['#666', '#ff1744', '#ff9100', '#ffea00', '#00e676', '#00e5ff'];
 
+  // Build detailed summary
   let summary = [];
-  if (darknessLevel === 'day') summary.push('Es ist zu hell fuer Nordlichter');
-  else {
+  if (darknessLevel === 'day') {
+    summary.push('Es ist zu hell fuer Nordlichter');
+  } else {
     if (kpVal >= minKp) summary.push(`KP ${kpVal} reicht fuer ${loc.name}`);
-    else summary.push(`KP ${kpVal} ist zu niedrig (min. KP ${minKp} fuer ${loc.name})`);
+    else summary.push(`KP ${kpVal} ist zu niedrig (min. KP ${minKp})`);
+
+    if (bz !== null) {
+      if (bz <= -10) summary.push('Bz stark suedwaerts - sehr gut!');
+      else if (bz <= -5) summary.push('Bz suedwaerts - guenstig');
+      else if (bz <= 0) summary.push('Bz leicht suedwaerts');
+      else summary.push('Bz nordwaerts - ungeunstig');
+    }
+
+    if (speed !== null) {
+      if (speed > 600) summary.push('sehr hoher Sonnenwind');
+      else if (speed > 500) summary.push('erhoehter Sonnenwind');
+    }
+
+    if (ovProb > 15) summary.push(`OVATION: ${Math.round(ovProb)}% Wahrscheinlichkeit`);
+
     if (cloudFrac > 60) summary.push('zu viele Wolken');
     else if (cloudFrac < 25) summary.push('klarer Himmel');
-    if (moonPhase > 0.7) summary.push('heller Mond reduziert Kontrast');
+    if (moonPhase > 0.7) summary.push('heller Mond');
   }
 
   document.getElementById('auroraStars').innerHTML =
@@ -914,6 +1130,7 @@ function renderAurora(weather, kpArr, sunData) {
   document.getElementById('auroraLabel').style.color = ratingColors[rating];
   document.getElementById('auroraSummary').textContent = summary.join(' \u2022 ');
 
+  // KP Panel
   document.getElementById('kpValue').textContent = kpVal.toFixed(1);
   document.getElementById('kpValue').style.color = kpVal >= minKp ? 'var(--accent-green)' : 'var(--danger)';
   document.querySelectorAll('.kp-segment').forEach(seg => {
@@ -923,6 +1140,88 @@ function renderAurora(weather, kpArr, sunData) {
   document.getElementById('kpInfo').textContent =
     `Misst die Sonnenwind-Aktivitaet. Ab KP ${minKp} hier in ${loc.name} sichtbar.`;
 
+  // Bz Panel
+  const bzEl = document.getElementById('bzValue');
+  const bzBar = document.getElementById('bzBar');
+  const bzInfo = document.getElementById('bzInfo');
+  if (bzEl) {
+    if (bz !== null) {
+      bzEl.textContent = `${bz.toFixed(1)} nT`;
+      bzEl.style.color = bz <= -5 ? 'var(--accent-green)' : bz <= 0 ? 'var(--accent-blue)' : 'var(--danger)';
+      // Bar: -20 (left=0%) to +20 (left=100%), zero at 50%
+      const bzClamped = Math.max(-20, Math.min(20, bz));
+      const bzPct = ((bzClamped + 20) / 40) * 100;
+      if (bzBar) {
+        // Bar from zero (50%) to current position
+        if (bz <= 0) {
+          bzBar.style.left = bzPct + '%';
+          bzBar.style.width = (50 - bzPct) + '%';
+          bzBar.style.background = bz <= -10 ? 'var(--accent-green)' : bz <= -5 ? '#4caf50' : 'var(--accent-blue)';
+        } else {
+          bzBar.style.left = '50%';
+          bzBar.style.width = (bzPct - 50) + '%';
+          bzBar.style.background = 'var(--danger)';
+        }
+      }
+      if (bzInfo) {
+        if (bz <= -10) bzInfo.textContent = 'Stark suedwaerts - Magnetosphaere weit offen. Beste Bedingungen!';
+        else if (bz <= -5) bzInfo.textContent = 'Suedwaerts - gute Bedingungen fuer Aurora.';
+        else if (bz <= 0) bzInfo.textContent = 'Leicht suedwaerts - maessige Bedingungen.';
+        else bzInfo.textContent = 'Nordwaerts - Magnetosphaere geschlossen. Ungeunstig.';
+      }
+    } else {
+      bzEl.textContent = '-- nT';
+      bzEl.style.color = 'var(--text-dim)';
+      if (bzBar) { bzBar.style.width = '0%'; }
+      if (bzInfo) bzInfo.textContent = 'Keine Daten verfuegbar.';
+    }
+  }
+
+  // Solar Wind Panel
+  const swValue = document.getElementById('solarWindValue');
+  const swDetails = document.getElementById('solarWindDetails');
+  if (swValue) {
+    if (speed !== null) {
+      swValue.textContent = `${Math.round(speed)} km/s`;
+      swValue.style.color = speed > 600 ? '#00e5ff' : speed > 500 ? 'var(--accent-green)' :
+        speed > 400 ? 'var(--warning)' : 'var(--text-dim)';
+    } else {
+      swValue.textContent = '-- km/s';
+      swValue.style.color = 'var(--text-dim)';
+    }
+  }
+  if (swDetails) {
+    const speedText = speed !== null ? `${Math.round(speed)} km/s` : '--';
+    const densityText = density !== null ? `${density.toFixed(1)} p/cm\u00B3` : '--';
+    swDetails.innerHTML = `<span class="sw-speed">Geschwindigkeit: ${speedText}</span>` +
+      `<span class="sw-density">Dichte: ${densityText}</span>`;
+  }
+
+  // OVATION Panel
+  const ovValue = document.getElementById('ovationValue');
+  const ovFill = document.getElementById('ovationFill');
+  const ovInfo = document.getElementById('ovationInfo');
+  if (ovValue) {
+    if (ovProb > 0) {
+      ovValue.textContent = `${Math.round(ovProb)}%`;
+      ovValue.style.color = ovProb > 30 ? 'var(--accent-green)' : ovProb > 15 ? 'var(--warning)' : 'var(--text-dim)';
+    } else {
+      ovValue.textContent = '--%';
+      ovValue.style.color = 'var(--text-dim)';
+    }
+  }
+  if (ovFill) {
+    ovFill.style.width = `${Math.min(100, ovProb)}%`;
+    ovFill.style.background = ovProb > 30 ? 'var(--accent-green)' : ovProb > 15 ? 'var(--warning)' : 'var(--text-dim)';
+  }
+  if (ovInfo) {
+    if (ovProb > 30) ovInfo.textContent = 'Hohe Aurora-Wahrscheinlichkeit laut NOAA-Modell!';
+    else if (ovProb > 15) ovInfo.textContent = 'Maessige Wahrscheinlichkeit fuer Aurora an diesem Standort.';
+    else if (ovProb > 5) ovInfo.textContent = 'Geringe Wahrscheinlichkeit. Moeglich bei klarem Himmel.';
+    else ovInfo.textContent = 'NOAA-Vorhersagemodell fuer diesen Standort.';
+  }
+
+  // Cloud Panel
   document.getElementById('cloudValue').textContent = `${Math.round(cloudFrac)}%`;
   document.getElementById('cloudValue').style.color = cloudFrac < 30 ? 'var(--accent-green)' :
     cloudFrac < 60 ? 'var(--warning)' : 'var(--danger)';
@@ -930,6 +1229,7 @@ function renderAurora(weather, kpArr, sunData) {
   document.getElementById('cloudFill').style.background = cloudFrac < 30 ? 'var(--accent-green)' :
     cloudFrac < 60 ? 'var(--warning)' : 'var(--danger)';
 
+  // Darkness Panel
   document.getElementById('darknessValue').textContent = darknessText;
   document.getElementById('darknessValue').style.color =
     darknessLevel === 'night' ? 'var(--accent-green)' :
@@ -944,10 +1244,15 @@ function renderAurora(weather, kpArr, sunData) {
 }
 
 // ===== Hourly Aurora Forecast =====
-function computeHourlyAurora(timeseries, kpForecast, currentKp, lat, lon) {
+function computeHourlyAurora(timeseries, kpForecast, currentKp, lat, lon, solarWind, ovationProb) {
   const now = new Date();
   const result = [];
   const interval = auroraInterval;
+
+  const bz = solarWind ? solarWind.bz : null;
+  const speed = solarWind ? solarWind.speed : null;
+  const density = solarWind ? solarWind.density : null;
+  const ovProb = ovationProb || 0;
 
   const future = timeseries.filter(ts => {
     const t = new Date(ts.time);
@@ -973,7 +1278,8 @@ function computeHourlyAurora(timeseries, kpForecast, currentKp, lat, lon) {
 
     const sunPos = SunCalc.getPosition(t, lat, lon);
     const sunAlt = sunPos.altitude * (180 / Math.PI);
-    const rating = computeAuroraRating(kp, clouds, sunAlt, lat);
+    const moonIllum = SunCalc.getMoonIllumination(t);
+    const rating = computeAuroraRating(kp, clouds, sunAlt, lat, bz, speed, density, ovProb, moonIllum.fraction);
 
     result.push({
       time: t,
@@ -982,7 +1288,9 @@ function computeHourlyAurora(timeseries, kpForecast, currentKp, lat, lon) {
       clouds: Math.round(clouds),
       sunAlt,
       isDark: sunAlt < -6,
-      isNow: i === 0
+      isNow: i === 0,
+      bz: bz !== null ? Math.round(bz * 10) / 10 : null,
+      ovation: ovProb > 0 ? Math.round(ovProb) : null
     });
   }
 
@@ -1003,6 +1311,15 @@ function renderHourlyAurora(hourlyData) {
     const color = ratingColors[h.rating];
     const dimClass = h.isDark ? '' : ' daylight';
 
+    let extraInfo = '';
+    if (h.bz !== null) {
+      const bzColor = h.bz <= -5 ? 'var(--accent-green)' : h.bz <= 0 ? 'var(--accent-blue)' : 'var(--danger)';
+      extraInfo += `<span class="aurora-hour-bz" style="color:${bzColor}">Bz ${h.bz}</span>`;
+    }
+    if (h.ovation !== null && h.ovation > 0) {
+      extraInfo += `<span class="aurora-hour-ov">${h.ovation}%</span>`;
+    }
+
     return `<div class="aurora-hour${h.isNow ? ' now' : ''}${dimClass}">
       <span class="aurora-hour-time">${hour}</span>
       <div class="aurora-hour-circle" style="background:${color}22;border:2px solid ${color}">
@@ -1011,6 +1328,7 @@ function renderHourlyAurora(hourlyData) {
       <span class="aurora-hour-label" style="color:${color}">${ratingLabels[h.rating]}</span>
       <span class="aurora-hour-clouds">\u2601 ${h.clouds}%</span>
       <span class="aurora-hour-kp">KP ${h.kp}</span>
+      ${extraInfo}
       ${!h.isDark ? '<span class="aurora-hour-day">\u2600\uFE0F</span>' : ''}
     </div>`;
   }).join('');
@@ -1222,10 +1540,12 @@ async function loadData() {
   btn.classList.add('spinning');
 
   try {
-    const [weatherData, kpArr, kpForecast] = await Promise.all([
+    const [weatherData, kpArr, kpForecast, solarWind, ovationProb] = await Promise.all([
       fetchWeather(loc.lat, loc.lon),
       fetchKpIndex().catch(() => null),
-      fetchKpForecast().catch(() => null)
+      fetchKpForecast().catch(() => null),
+      fetchSolarWind().catch(() => null),
+      fetchOvation(loc.lat, loc.lon).catch(() => 0)
     ]);
 
     const ts = weatherData.properties.timeseries;
@@ -1238,7 +1558,7 @@ async function loadData() {
 
     renderCurrentWeather(ts[0]);
     renderHourly(ts);
-    renderAurora(ts[0], kpArr, sunData);
+    renderAurora(ts[0], kpArr, sunData, solarWind, ovationProb);
 
     // Forecast-Tabs: Daten in State speichern
     forecastTimeseries = ts;
@@ -1253,7 +1573,7 @@ async function loadData() {
     renderWebcams();
 
     // Hourly Aurora Forecast
-    const hourlyAurora = computeHourlyAurora(ts, kpForecast, currentKp, loc.lat, loc.lon);
+    const hourlyAurora = computeHourlyAurora(ts, kpForecast, currentKp, loc.lat, loc.lon, solarWind, ovationProb);
     renderHourlyAurora(hourlyAurora);
 
     // Refresh active map (meteogram/regional depend on location)
@@ -1306,6 +1626,8 @@ async function init() {
     weatherCache = {};
     kpData = null;
     kpForecastCache = null;
+    solarWindCache = null;
+    ovationCache = null;
     loadData();
   });
 
