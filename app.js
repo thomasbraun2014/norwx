@@ -4,12 +4,12 @@ const NAS_PROXY = 'http://192.168.0.135:3001';
 const isGitHubPages = location.hostname.endsWith('.github.io');
 
 const LOCATIONS = [
-  { name: 'Tromsoe', lat: 69.6496, lon: 18.9560, yrId: '1-305409' },
-  { name: 'Nordfjordeid', lat: 61.7890, lon: 5.9870, yrId: '1-168106' },
+   { name: 'Nordfjordeid', lat: 61.7890, lon: 5.9870, yrId: '1-168106' },
   { name: 'Narvik', lat: 68.4385, lon: 17.4272, yrId: '1-283156' },
-  { name: 'Aalesund', lat: 62.4722, lon: 6.1495, yrId: '1-181828' },
   { name: 'Honningsvag', lat: 70.9813, lon: 25.9706, yrId: '1-328454' },
   { name: 'Nordkapp', lat: 71.1685, lon: 25.7838, yrId: '1-328454' },
+  { name: 'Tromsoe', lat: 69.6496, lon: 18.9560, yrId: '1-305409' }, 
+  { name: 'Aalesund', lat: 62.4722, lon: 6.1495, yrId: '1-181828' },
   { name: 'Lofoten', lat: 68.2094, lon: 14.5630, yrId: '1-276917' },
   { name: 'Bodoe', lat: 67.2804, lon: 14.4049, yrId: '1-269359' },
   { name: 'Trondheim', lat: 63.4305, lon: 10.3951, yrId: '1-211102' },
