@@ -1,10 +1,10 @@
-const CACHE_NAME = 'btwetter-v11';
+const CACHE_NAME = 'btwetter-v12';
 const STATIC_ASSETS = [
   './',
   './index.html',
-  './style.css?v=10',
-  './app.js?v=10',
-  './suncalc.js?v=10',
+  './style.css?v=11',
+  './app.js?v=11',
+  './suncalc.js?v=11',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',

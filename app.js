@@ -4,19 +4,45 @@ const NAS_PROXY = 'http://192.168.0.135:3001';
 const isGitHubPages = location.hostname.endsWith('.github.io');
 
 const LOCATIONS = [
-   { name: 'Nordfjordeid', lat: 61.7890, lon: 5.9870, yrId: '1-168106' },
+  { name: 'Nordfjordeid', lat: 61.7890, lon: 5.9870, yrId: '1-168106' },
   { name: 'Narvik', lat: 68.4385, lon: 17.4272, yrId: '1-283156' },
-  { name: 'Honningsvag', lat: 70.9813, lon: 25.9706, yrId: '1-328454' },
   { name: 'Nordkapp', lat: 71.1685, lon: 25.7838, yrId: '1-328454' },
-  { name: 'Tromsoe', lat: 69.6496, lon: 18.9560, yrId: '1-305409' }, 
+  { name: 'Honningsvag', lat: 70.9813, lon: 25.9706, yrId: '1-328454' },
+  { name: 'Tromsoe', lat: 69.6496, lon: 18.9560, yrId: '1-305409' },
   { name: 'Aalesund', lat: 62.4722, lon: 6.1495, yrId: '1-181828' },
-  { name: 'Lofoten', lat: 68.2094, lon: 14.5630, yrId: '1-276917' },
-  { name: 'Bodoe', lat: 67.2804, lon: 14.4049, yrId: '1-269359' },
-  { name: 'Trondheim', lat: 63.4305, lon: 10.3951, yrId: '1-211102' },
-  { name: 'Bergen', lat: 60.3913, lon: 5.3221, yrId: '1-92416' },
-  { name: 'Stavanger', lat: 58.9700, lon: 5.7331, yrId: '1-15183' },
-  { name: 'Oslo', lat: 59.9139, lon: 10.7522, yrId: '1-72837' }
+  { name: 'Bremerhaven', lat: 53.5396, lon: 8.5809, yrId: '' }
 ];
+
+// ===== Custom Locations (localStorage) =====
+function loadCustomLocations() {
+  try {
+    return JSON.parse(localStorage.getItem('btwetter-custom-locations') || '[]');
+  } catch { return []; }
+}
+
+function saveCustomLocations(locs) {
+  localStorage.setItem('btwetter-custom-locations', JSON.stringify(locs));
+}
+
+function getAllLocations() {
+  return [...LOCATIONS, ...loadCustomLocations()];
+}
+
+function addCustomLocation(name, lat, lon) {
+  const custom = loadCustomLocations();
+  custom.push({ name, lat, lon, yrId: '', custom: true });
+  saveCustomLocations(custom);
+}
+
+function removeCustomLocation(idx) {
+  // idx is relative to the full list, custom starts after LOCATIONS.length
+  const customIdx = idx - LOCATIONS.length;
+  const custom = loadCustomLocations();
+  if (customIdx >= 0 && customIdx < custom.length) {
+    custom.splice(customIdx, 1);
+    saveCustomLocations(custom);
+  }
+}
 
 // Minimum KP by latitude
 function getMinKp(lat) {
@@ -30,9 +56,10 @@ function getMinKp(lat) {
 
 // Find nearest cached location (for GPS on GitHub Pages)
 function findNearestLocation(lat, lon) {
-  let nearest = LOCATIONS[0];
+  const all = getAllLocations();
+  let nearest = all[0];
   let minDist = Infinity;
-  for (const loc of LOCATIONS) {
+  for (const loc of all) {
     const dlat = loc.lat - lat;
     const dlon = (loc.lon - lon) * Math.cos(lat * Math.PI / 180);
     const dist = dlat * dlat + dlon * dlon;
@@ -292,7 +319,9 @@ let activeForecastTab = '3d';
 
 function getActiveLocation() {
   if (isGpsActive && gpsLocation) return gpsLocation;
-  return LOCATIONS[currentLocationIdx];
+  const all = getAllLocations();
+  if (currentLocationIdx >= all.length) currentLocationIdx = 0;
+  return all[currentLocationIdx];
 }
 
 // ===== Open-Meteo (CORS-friendly, for GPS on GitHub Pages) =====
@@ -384,17 +413,22 @@ async function fetchWeather(lat, lon) {
   let urls;
   if (isGitHubPages) {
     // GitHub Pages: api.met.no has no CORS support
-    const loc = LOCATIONS.find(l => l.lat === lat && l.lon === lon);
-    if (loc) {
-      // Fixed location: use pre-cached static data
+    const loc = getAllLocations().find(l => l.lat === lat && l.lon === lon);
+    if (loc && !loc.custom && loc.yrId) {
+      // Fixed location with static data: use pre-cached
       const slug = loc.name.toLowerCase();
-      urls = [`./data/weather-${slug}.json`];
-    } else {
-      // GPS: use Open-Meteo API (has CORS, works directly from browser)
-      const data = await fetchWeatherOpenMeteo(lat, lon);
-      weatherCache[key] = { data, time: Date.now() };
-      return data;
+      try {
+        const data = await fetchJson(`./data/weather-${slug}.json`, 5000);
+        weatherCache[key] = { data, time: Date.now() };
+        return data;
+      } catch {
+        // Static file missing, fall through to Open-Meteo
+      }
     }
+    // GPS / custom / missing static: use Open-Meteo API (has CORS)
+    const data = await fetchWeatherOpenMeteo(lat, lon);
+    weatherCache[key] = { data, time: Date.now() };
+    return data;
   } else {
     const directUrl = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lon}`;
     const proxyUrl = `/api/weather?lat=${lat}&lon=${lon}`;
@@ -632,15 +666,20 @@ async function requestGpsLocation() {
 // ===== Render Functions =====
 function renderLocationTabs() {
   const tabs = document.getElementById('locationTabs');
+  const all = getAllLocations();
   let gpsLabel = '\uD83D\uDCCD Standort';
   if (isGpsActive && gpsLocation) {
     gpsLabel = `\uD83D\uDCCD ${gpsLocation.lat.toFixed(2)}, ${gpsLocation.lon.toFixed(2)}`;
   }
   const gpsTab = `<button class="loc-tab gps-tab${isGpsActive ? ' active' : ''}" data-gps="1">${gpsLabel}</button>`;
-  const locTabs = LOCATIONS.map((loc, i) =>
-    `<button class="loc-tab${!isGpsActive && i === currentLocationIdx ? ' active' : ''}" data-idx="${i}">${loc.name}</button>`
-  ).join('');
-  tabs.innerHTML = gpsTab + locTabs;
+  const locTabs = all.map((loc, i) => {
+    const active = !isGpsActive && i === currentLocationIdx ? ' active' : '';
+    const isCustom = loc.custom ? ' custom-loc' : '';
+    const deleteBtn = loc.custom ? `<span class="loc-tab-delete" data-delidx="${i}">\u2715</span>` : '';
+    return `<button class="loc-tab${active}${isCustom}" data-idx="${i}">${loc.name}${deleteBtn}</button>`;
+  }).join('');
+  const addTab = `<button class="loc-tab add-loc-tab" data-add="1">+</button>`;
+  tabs.innerHTML = gpsTab + locTabs + addTab;
 
   tabs.querySelector('.gps-tab').addEventListener('click', async () => {
     try {
@@ -653,14 +692,88 @@ function renderLocationTabs() {
     }
   });
 
-  tabs.querySelectorAll('.loc-tab:not(.gps-tab)').forEach(btn => {
-    btn.addEventListener('click', () => {
+  tabs.querySelectorAll('.loc-tab:not(.gps-tab):not(.add-loc-tab)').forEach(btn => {
+    btn.addEventListener('click', e => {
+      // Don't switch location if delete button was clicked
+      if (e.target.classList.contains('loc-tab-delete')) return;
       isGpsActive = false;
       currentLocationIdx = parseInt(btn.dataset.idx);
       renderLocationTabs();
       loadData();
     });
   });
+
+  // Delete buttons for custom locations
+  tabs.querySelectorAll('.loc-tab-delete').forEach(del => {
+    del.addEventListener('click', e => {
+      e.stopPropagation();
+      const idx = parseInt(del.dataset.delidx);
+      const loc = all[idx];
+      if (confirm(`"${loc.name}" entfernen?`)) {
+        removeCustomLocation(idx);
+        if (currentLocationIdx >= getAllLocations().length) currentLocationIdx = 0;
+        renderLocationTabs();
+        loadData();
+      }
+    });
+  });
+
+  // Add location button
+  tabs.querySelector('.add-loc-tab').addEventListener('click', showAddLocationDialog);
+}
+
+function showAddLocationDialog() {
+  // Remove existing dialog if any
+  const existing = document.getElementById('addLocDialog');
+  if (existing) { existing.remove(); return; }
+
+  const dialog = document.createElement('div');
+  dialog.id = 'addLocDialog';
+  dialog.className = 'add-loc-dialog';
+  dialog.innerHTML = `
+    <div class="add-loc-content">
+      <h3>Ort hinzufuegen</h3>
+      <input type="text" id="addLocName" placeholder="Name (z.B. Hamburg)" autocomplete="off">
+      <div class="add-loc-row">
+        <input type="number" id="addLocLat" placeholder="Breitengrad" step="0.0001">
+        <input type="number" id="addLocLon" placeholder="Laengengrad" step="0.0001">
+      </div>
+      <button id="addLocGpsBtn" class="add-loc-gps-btn">\uD83D\uDCCD Aktuelle Position</button>
+      <div class="add-loc-actions">
+        <button id="addLocCancel" class="add-loc-cancel">Abbrechen</button>
+        <button id="addLocSave" class="add-loc-save">Speichern</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+
+  document.getElementById('addLocCancel').addEventListener('click', () => dialog.remove());
+  dialog.addEventListener('click', e => { if (e.target === dialog) dialog.remove(); });
+
+  document.getElementById('addLocGpsBtn').addEventListener('click', () => {
+    if (!navigator.geolocation) { alert('GPS nicht verfuegbar'); return; }
+    navigator.geolocation.getCurrentPosition(pos => {
+      document.getElementById('addLocLat').value = pos.coords.latitude.toFixed(4);
+      document.getElementById('addLocLon').value = pos.coords.longitude.toFixed(4);
+    }, err => alert('GPS Fehler: ' + err.message), { enableHighAccuracy: true, timeout: 10000 });
+  });
+
+  document.getElementById('addLocSave').addEventListener('click', () => {
+    const name = document.getElementById('addLocName').value.trim();
+    const lat = parseFloat(document.getElementById('addLocLat').value);
+    const lon = parseFloat(document.getElementById('addLocLon').value);
+    if (!name) { alert('Bitte Name eingeben'); return; }
+    if (isNaN(lat) || isNaN(lon)) { alert('Bitte gueltige Koordinaten eingeben'); return; }
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) { alert('Koordinaten ausserhalb des gueltigen Bereichs'); return; }
+    addCustomLocation(name, lat, lon);
+    dialog.remove();
+    currentLocationIdx = getAllLocations().length - 1;
+    isGpsActive = false;
+    renderLocationTabs();
+    loadData();
+  });
+
+  document.getElementById('addLocName').focus();
 }
 
 function renderCurrentWeather(ts) {

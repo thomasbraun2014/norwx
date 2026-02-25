@@ -124,6 +124,127 @@ body {
   color: var(--text);
 }
 
+.loc-tab.custom-loc {
+  border-style: dashed;
+}
+
+.loc-tab-delete {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--danger);
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.loc-tab-delete:hover {
+  opacity: 1;
+}
+
+.add-loc-tab {
+  font-size: 18px !important;
+  font-weight: 400 !important;
+  padding: 8px 14px !important;
+  color: var(--accent-green) !important;
+  border-color: var(--accent-green) !important;
+  border-style: dashed !important;
+}
+
+/* Add Location Dialog */
+.add-loc-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.add-loc-content {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  padding: 20px;
+  width: 100%;
+  max-width: 340px;
+}
+
+.add-loc-content h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+.add-loc-content input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--card-border);
+  background: rgba(255,255,255,0.06);
+  color: var(--text);
+  font-size: 14px;
+  margin-bottom: 8px;
+  outline: none;
+}
+
+.add-loc-content input:focus {
+  border-color: var(--accent-green);
+}
+
+.add-loc-content input::placeholder {
+  color: var(--text-dim);
+}
+
+.add-loc-row {
+  display: flex;
+  gap: 8px;
+}
+
+.add-loc-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.add-loc-gps-btn {
+  width: 100%;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-blue);
+  background: rgba(0,176,255,0.1);
+  color: var(--accent-blue);
+  font-size: 13px;
+  cursor: pointer;
+  margin-bottom: 14px;
+}
+
+.add-loc-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.add-loc-cancel, .add-loc-save {
+  flex: 1;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  border: none;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.add-loc-cancel {
+  background: rgba(255,255,255,0.08);
+  color: var(--text-dim);
+}
+
+.add-loc-save {
+  background: var(--accent-green);
+  color: #000;
+}
+
 /* Content */
 .content {
   padding: 0 12px 24px;
